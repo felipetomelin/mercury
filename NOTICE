@@ -1,0 +1,19 @@
+Mercury
+https://github.com/felipetomelin/mercury
+
+Mercury is an independent project derived from herdr v0.9.3:
+https://github.com/herdrdev/herdr/tree/v0.9.3
+
+The original project is distributed under the Apache License, Version 2.0.
+The LICENSE file was restored from the upstream v0.9.3 tag without changes:
+https://raw.githubusercontent.com/herdrdev/herdr/v0.9.3/LICENSE
+
+Mercury modifications include project naming, account usage integrations,
+guided scheduling, routing, history, opt-in Learn workflows, Markdown/Obsidian
+knowledge, GraphRAG, tests, and documentation. Modification history is recorded
+in this repository's commits, PLAN.md, and specifications.
+
+Vendored and packaged components retain their respective licenses and notices,
+including portable-pty and Microsoft.Windows.Console.ConPTY. Ghostty terminal
+components are attributed in their source and package metadata. This notice
+does not replace or change the terms of those components.

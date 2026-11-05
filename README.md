@@ -1,137 +1,152 @@
-# Mercury
+<p align="center">
+  <img src="assets/mercury/hero.svg" alt="Mercury — Your coding agents. One terminal." width="100%" />
+</p>
 
-Terminal agent controller for Claude Code + Codex CLI, with crons, usage/cost tracking,
-model routing, and auto-improvement. Personal, local-only project — no public releases,
-no hosted distribution, no public issue tracker.
+<p align="center">
+  <strong>A terminal workspace for Codex and Claude Code.</strong><br />
+  Persistent sessions, account usage, guided scheduling, and local Markdown knowledge.
+</p>
 
-See [`PLAN.md`](./PLAN.md) for the plan, decisions, and current phase.
+<p align="center">
+  <a href="#quick-start">Quick start</a> · <a href="#what-you-can-do">Features</a> ·
+  <a href="#in-the-terminal">Screenshots</a> · <a href="#documentation">Docs</a> ·
+  <a href="README.pt-BR.md">Português</a>
+</p>
 
-For the connected-account Usage dashboard, guided Cron editor and local memory,
-see the [Usage and Crons guide](./docs/dev/usage-cron-guide.md).
+<p align="center">
+  <a href="Cargo.toml"><img src="https://img.shields.io/badge/built_with-Rust-dea584?style=flat-square" alt="Built with Rust" /></a>
+  <a href="#project-status"><img src="https://img.shields.io/badge/status-source_preview-7dd3fc?style=flat-square" alt="Source preview" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache_2.0-a5f3d4?style=flat-square" alt="Apache 2.0 license" /></a>
+</p>
 
+Mercury brings the coding CLIs you already use into one persistent workspace.
+Keep terminals running when you detach, see the limits your accounts report,
+schedule repeatable work, and retrieve knowledge from your Markdown notes.
 
-For local use after building, run `target/debug/mercury` from this checkout.
-Usage, themes, crons, routing, history, and the opt-in Learn flow are implemented
-locally. Real Claude/Codex smokes and visual inspection are left to the user;
-SonarQube/Veracode/Wiz and quantitative coverage were explicitly waived for
-this local delivery, not reported as passing. Keep Learn off while trying it
-on temporary targets first. Teams interaction is in the backlog; Mercury does
-not send email. Do not use `mercury update` yet: this local fork has no
-published Mercury release feed. Windows distribution still requires platform qualification; pinned third-party
-notices/licenses were restored, as documented in the local phase8 review.
+## In the terminal
 
-To try the local build without explicitly scheduling or submitting a new task:
+### See account limits at a glance
 
-```bash
-target/debug/mercury config check
-target/debug/mercury
+<img src="assets/mercury/usage.png" alt="Mercury Usage tab showing Claude Enterprise, Codex Business, remaining quota, cache and local activity" width="100%" />
+
+Account limits are separate from local token and cost history. When a provider
+does not report a quota, Mercury explains that instead of inventing a number.
+
+### Schedule work without writing cron expressions
+
+<img src="assets/mercury/crons.png" alt="Mercury scheduling form with a weekday preset, explicit timezone, next occurrence, executor and review controls" width="100%" />
+
+Choose a schedule and executor, check the timezone and next run, then review
+before saving. Edit, pause, run now, and delete are available in the interface.
+
+<sub>Images use the actual Mercury renderer with fictional demo data. The current
+interface includes Portuguese labels. See <a href="assets/mercury/README.md">asset sources and regeneration</a>.</sub>
+
+## What you can do
+
+| Capability | In practice |
+| --- | --- |
+| **Persistent workspaces** | Keep agent terminals running while the client is detached; organize work with tabs and panes. |
+| **Connected-account usage** | Read Codex and Claude account metadata, available limits, resets and the age of each reading. |
+| **Guided scheduling** | Pick weekdays, daily/monthly schedules, intervals or a one-time run; advanced cron expressions remain available. |
+| **Agent routing** | Apply routing rules to Codex/Claude tasks and inspect the selection before submitting work. |
+| **Markdown memory + GraphRAG** | Index an Obsidian-compatible vault, retrieve source passages, and generate cited answers with opt-in model access. |
+| **History and Learn** | Find past conversations; optionally apply allowlisted improvements with backups, an audit trail and undo. |
+
+## Quick start
+
+### 1. Install the prerequisites
+
+- [Rust through rustup](https://rustup.rs/). The toolchain is pinned in [`rust-toolchain.toml`](rust-toolchain.toml).
+- [Zig 0.16.0](https://ziglang.org/download/) on `PATH`, or set `ZIG` to its executable. Mercury uses the vendored Ghostty terminal library.
+- Codex CLI and/or Claude Code, installed and authenticated separately.
+
+### 2. Build and open Mercury
+
+```sh
+git clone https://github.com/felipetomelin/mercury.git
+cd mercury
+cargo build --release --locked
+./target/release/mercury config check
+./target/release/mercury
 ```
 
-Keep the Mercury UI running, then use a second terminal for server-backed
-commands such as:
+This is a **source build**. Prebuilt releases, package-manager installation and
+the Mercury update feed are not published yet.
 
-```bash
-target/debug/mercury history search --query "your search terms"
-target/debug/mercury cron doctor
+### 3. Explore the workspace
+
+Click **usage**, **crons**, **history**, **learn** or **knowledge** in the tab bar.
+In the default keymap, `Ctrl+B` then `u` opens Usage and `Ctrl+B` then `Shift+C`
+opens Crons. Use `a` to create a schedule, `e` to edit and `d` to delete it.
+
+With Mercury running, a second terminal can inspect its state:
+
+```sh
+./target/release/mercury status
+./target/release/mercury cron list
+./target/release/mercury cron doctor
+./target/release/mercury knowledge status --json
 ```
 
-`config check` works without a server. `history search` and `cron doctor` return
-`server_not_running` if the UI/server is not running. The UI opens or restores
-a persistent terminal session, including any saved session. Its Usage, Crons,
-History, and Learn tabs can be inspected locally; Learn review remains off
-unless you explicitly enable and configure it. `route preview --stdin` is
-read-only; `route submit` and `cron run` intentionally start agents/jobs.
+## Bring your notes into the workflow
 
-If `mercury status` says `restart_needed: yes` or
-`server_binary_stale: yes`, the CLI is reaching an older server process even
-when both report version 0.9.3. Save work and detach the UI (`Ctrl+B`, then
-`q`); from a normal terminal, run
-`target/debug/mercury server live-handoff --import-exe "$PWD/target/debug/mercury"`.
-Check `target/debug/mercury status` again before trying Crons, Route, Usage,
-or Learn. Handoff is intended to preserve panes; if it fails, do not kill
-server processes blindly—inspect the status and server log first. A Codex
-agent sandbox may reject the local Mercury socket with `Operation not
-permitted`; run manual smoke commands in your own terminal.
-
-For a disposable Cron check after the server is current, create a script job
-with `target/debug/mercury cron add --name smoke-local --schedule "every 1h"
---script /usr/bin/true`. Copy the returned job ID, then run
-`target/debug/mercury cron run JOB_ID`, inspect
-`target/debug/mercury cron runs JOB_ID`, and remove it with
-`target/debug/mercury cron rm JOB_ID`.
-The simple CLI form enables local desktop notification on completion and the
-job remains scheduled until removed; it does not send email.
-`target/debug/mercury cron list` shows existing IDs.
-
-Learn inspection is available through `mercury learn list|status|show|diff|undo`
-and the local Learn tab (`prefix+shift+u`). The tab shows redacted audit data;
-undo requires a second `u` on the same item and refuses to replace later human
-edits. Automatic review remains opt-in through `[learn].enabled = true`.
-The Learn tab's `m` page shows recent provider-reported tokens/cost from
-opted-in headless cron runs. An explicit `[learn.job_targets]` mapping links a
-job UUID to one allowlisted Learn target. When exactly one applied change is
-still intact and runs exist on both sides, the tab shows descriptive before/
-after averages; this is not proof that Learn caused an improvement. Otherwise
-it says data is insufficient.
-Each sample uses two lines so its tokens, cost, and outcome remain legible in
-an 80-column terminal with the sidebar open.
-The sample time is the cron run's persisted completion time, even after a
-delayed restart replay. Failed Learn writes are retried every five minutes
-while Learn is enabled. Older samples are not retroactively corrected.
-
-To allow Learn to edit routing, configure a `config-section` target whose path
-is the active Mercury `config.toml`; only `[route]` is shown to the reviewer or
-merged. To allow a Cron edit, configure a `cron-job` target whose ID is the
-existing job UUID (`mercury cron list`) and whose path is the active
-`jobs.toml`. Its reviewer patch may change only `schedule`, `enabled`, and
-`timeout_seconds`; an active run blocks edit and undo. `max_bytes` must cover
-the full file and cannot exceed 65536. A sample layout, with placeholders to
-replace before enabling, is:
+Mercury reads Markdown files directly, including Obsidian-style links. Obsidian
+does not need to be running. Start with local indexing in your Mercury config:
 
 ```toml
-[learn]
-enabled = false
-
-[[learn.target]]
-id = "routing"
-path = "/absolute/path/to/config.toml"
-kind = "config-section"
-max_bytes = 65536
-
-[[learn.target]]
-id = "123e4567-e89b-12d3-a456-426614174000"
-path = "/absolute/path/to/jobs.toml"
-kind = "cron-job"
-max_bytes = 65536
-
-[learn.job_targets]
-"123e4567-e89b-12d3-a456-426614174000" = "routing"
+[knowledge]
+enabled = true
+vault = "/absolute/path/to/your/vault"
+allow_external = false
 ```
 
-The mapping can point to a different configured target; historical samples
-without an explicit mapping remain unclassified. There is no automatic
-30-day unused-skill archive rule. Weekly cleanup only merges proven duplicates
-with backup and undo.
+After reloading the config:
 
-## development
-
-```bash
-cargo build
-cargo test --workspace -- --test-threads=1  # Rust tests without cargo-nextest
-just test        # full recipe; requires cargo-nextest and bun
-just check       # formatting, tests, and maintenance checks
+```sh
+./target/release/mercury server reload-config
+./target/release/mercury knowledge index --json
+./target/release/mercury knowledge search --query "deployment decisions" --json
 ```
 
-See [`CLAUDE.md`](./CLAUDE.md) for build/toolchain notes and development conventions.
+Text search and explicit links stay local. Graph extraction, model-assisted search
+and generated answers use your authenticated Codex/Claude CLIs only after explicit
+configuration of external access. Responses carry source references; inferred
+relations remain distinct from reviewed decisions.
 
-## Knowledge and GraphRAG
+→ [Knowledge and GraphRAG setup](docs/knowledge/README.md)
 
-Local Markdown/Obsidian indexing and source-grounded GraphRAG use the authenticated
-Codex/Claude CLIs through Mercury routing. The feature is default-off; the real
-vault is not modified by enabling search. See [setup and commands](docs/knowledge/README.md)
-and [approved specification](specs/008-knowledge-graphrag/spec.md).
+## Project status
 
-External SonarQube/Veracode/Wiz and quantitative coverage gates are waived for
-Mercury by explicit user decision on 2026-10-29. Local tests, review, build,
-Clippy, formatting and maintenance checks remain required; see
-[project policy](.specify/memory/constitution.md).
+An independent project under active development, based on
+[herdr v0.9.3](https://github.com/herdrdev/herdr/tree/v0.9.3).
+
+| Platform | Current status |
+| --- | --- |
+| **macOS** | Local development and validation environment. |
+| **Linux** | Build paths exist; needs platform-specific qualification. |
+| **Windows** | Experimental; local Knowledge storage currently requires Unix permissions. |
+
+Detach preserves running processes while the server remains alive. Server/machine
+restart can restore saved layout/session state; it does not preserve the original
+processes. Provider limits depend on what each account and CLI exposes. Learn is
+disabled by default. See the [validation report](docs/dev/usage-cron-009-review.md)
+for the tested scope and known limits.
+
+## Documentation
+
+- [Usage, scheduling and memory guide](docs/dev/usage-cron-guide.md)
+- [Knowledge / Obsidian / GraphRAG](docs/knowledge/README.md)
+- [Development and advanced local operation](DEVELOPMENT.md)
+- [API schema](docs/next/api/mercury-api.schema.json)
+- [Plan and implementation history](PLAN.md)
+- [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+
+## Credits and license
+
+Mercury builds on herdr and the work of its contributors. Terminal rendering uses
+Ghostty components; vendored dependencies retain their notices and licenses.
+Mercury adds account usage, routing, guided scheduling, history, local knowledge
+and opt-in learning workflows to this foundation.
+
+[Apache License 2.0](LICENSE) · [Attribution and modifications](NOTICE)

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title">
+ <title id="title">Mercury — terminal workspace for Codex and Claude Code</title>
+ <defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#0c111b"/><stop offset="1" stop-color="#1d2b43"/></linearGradient></defs>
+ <rect width="1280" height="640" fill="url(#bg)"/>
+ <path d="M80 84h1120" stroke="#344054"/>
+ <text x="80" y="155" fill="#a5f3d4" font-family="monospace" font-size="24" letter-spacing="4">CODEX + CLAUDE CODE</text>
+ <text x="73" y="320" fill="#f0f5ff" font-family="Arial, sans-serif" font-size="148" font-weight="700" letter-spacing="-5">Mercury</text>
+ <text x="80" y="395" fill="#c3cfdf" font-family="Arial, sans-serif" font-size="40">Your coding agents. One terminal.</text>
+ <path d="M80 460h1120" stroke="#344054"/>
+ <text x="80" y="518" fill="#94a8c5" font-family="Arial, sans-serif" font-size="26">Persistent sessions · Usage · Scheduling · GraphRAG</text>
+ <text x="80" y="573" fill="#a5f3d4" font-family="monospace" font-size="23">github.com/felipetomelin/mercury</text>
+</svg>

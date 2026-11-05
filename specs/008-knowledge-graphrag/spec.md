@@ -14,7 +14,7 @@ O usuário quer retomar trabalho rapidamente e reutilizar conhecimento com agent
 ## Clarificações confirmadas
 
 - GraphRAG faz parte desta entrega, e não de um ciclo futuro.
-- Vault existente: `/Users/c12103q/Documents/Obsidian Vault/AI PV Graph`.
+- Vault existente: `/absolute/path/to/obsidian-vault`.
 - Indexação e armazenamento locais por padrão. Em esclarecimento posterior nesta sessão, o usuário rejeitou Ollama e escolheu os CLIs Codex/Claude autenticados com roteamento Mercury; tarefas LLM enviam trechos somente aos provedores explicitamente habilitados.
 - O diretório existe e está vazio na inspeção de 2026-10-29.
 - O caminho acima é uma configuração pessoal, nunca um default compilado.

@@ -4,7 +4,7 @@ Solicitação explícita do usuário: “Vamos ativar a memoria local também”
 Operação sobre a feature008 já aprovada e implementada, sem alterar produção.
 
 - Instância debug ativa, protocolo22, versão0.9.3.
-- Config: `/Users/c12103q/.config/mercury-dev/config.toml`.
+- Config: `~/.config/mercury-dev/config.toml`.
 - Backup privado: `config.toml.backup-local-memory-20261029-135718`, no mesmo
   diretório. Gravação atômica, validada antes e após a substituição.
 - `[knowledge]`: enabled=true, vault configurado como solicitado,

@@ -532,9 +532,7 @@ pub(super) fn render_usage_view(
         area.y + 1,
         area.width,
         "r atualizar · ↑↓ agentes · Enter abrir · PgUp/PgDn rolar · q sair",
-        Style::default()
-            .fg(palette.surface_dim)
-            .bg(palette.panel_bg),
+        Style::default().fg(palette.subtext0).bg(palette.panel_bg),
     );
     let viewport = Rect::new(
         area.x,

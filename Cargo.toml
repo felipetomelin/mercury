@@ -4,6 +4,8 @@ version = "0.9.3"
 edition = "2021"
 build = "build.rs"
 description = "terminal controller for AI coding agents (Claude Code + Codex CLI)"
+license = "Apache-2.0"
+repository = "https://github.com/felipetomelin/mercury"
 keywords = ["terminal", "tui", "ai", "agents", "multiplexer"]
 categories = ["command-line-utilities"]
 include = [
@@ -12,6 +14,8 @@ include = [
     "docs/next/api/mercury-api.schema.json",
     "skills/mercury/SKILL.md",
     "README.md",
+    "LICENSE",
+    "NOTICE",
     "Cargo.toml",
 ]
 

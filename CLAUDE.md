@@ -1,6 +1,6 @@
 # Mercury
 
-Terminal agent controller for Claude Code + Codex CLI, written in Rust, modified freely with no obligation to any upstream project. The plan, decisions and phases live in `PLAN.md` — read it before starting work.
+Terminal agent controller for Claude Code + Codex CLI, written in Rust and based on herdr v0.9.3. Preserve upstream attribution and third-party notices; see `LICENSE` and `NOTICE`. The plan, decisions and phases live in `PLAN.md` — read it before starting work.
 
 ## Build
 

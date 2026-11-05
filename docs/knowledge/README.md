@@ -16,7 +16,7 @@ O exemplo habilita o envio dos trechos selecionados aos provedores listados.
 ```toml
 [knowledge]
 enabled = true
-vault = "/Users/c12103q/Documents/Obsidian Vault/AI PV Graph"
+vault = "/absolute/path/to/obsidian-vault"
 allow_external = true
 allowed_providers = ["claude", "codex"]
 max_model_calls = 128

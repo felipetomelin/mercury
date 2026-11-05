@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="440" viewBox="0 0 1600 440" role="img" aria-labelledby="title desc">
+ <title id="title">Mercury — Your coding agents. One terminal.</title>
+ <desc id="desc">Original Mercury wordmark with an orbital graph symbol on a dark background.</desc>
+ <defs>
+  <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#0c111b"/><stop offset="1" stop-color="#171e30"/></linearGradient>
+  <linearGradient id="mint"><stop stop-color="#a5f3d4"/><stop offset="1" stop-color="#7dd3fc"/></linearGradient>
+  <radialGradient id="glow"><stop stop-color="#5376a1" stop-opacity=".25"/><stop offset="1" stop-color="#5376a1" stop-opacity="0"/></radialGradient>
+ </defs>
+ <rect width="1600" height="440" rx="24" fill="url(#bg)"/>
+ <circle cx="1290" cy="210" r="270" fill="url(#glow)"/>
+ <path d="M92 54h1416" stroke="#344054"/>
+ <text x="96" y="103" fill="#a5f3d4" font-family="monospace" font-size="21" letter-spacing="4">CODEX + CLAUDE CODE</text>
+ <text x="88" y="240" fill="#f0f5ff" font-family="Arial, sans-serif" font-size="130" font-weight="700" letter-spacing="-5">Mercury</text>
+ <text x="96" y="303" fill="#c3cfdf" font-family="Arial, sans-serif" font-size="36">Your coding agents. One terminal.</text>
+ <text x="96" y="375" fill="#8294ae" font-family="Arial, sans-serif" font-size="23">Persistent sessions · Usage · Scheduling · Local knowledge</text>
+ <g transform="translate(1280 222)" fill="none">
+  <ellipse rx="164" ry="91" stroke="#6083a8" stroke-width="2" transform="rotate(-32)"/>
+  <ellipse rx="164" ry="91" stroke="#465578" stroke-width="2" transform="rotate(42)"/>
+  <circle r="100" fill="#111c2c" stroke="#334762" stroke-width="2"/>
+  <path d="M-50 43v-85l50 49 50-49v85" stroke="url(#mint)" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="-140" cy="68" r="10" fill="#a5f3d4"/>
+  <circle cx="131" cy="91" r="8" fill="#a5b4fc"/>
+  <circle cx="123" cy="-111" r="7" fill="#7dd3fc"/>
+ </g>
+</svg>
