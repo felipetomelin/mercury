@@ -31,12 +31,18 @@ pub(super) fn render_learn_view(
     let palette = &config.palette;
     Clear.render(area, buffer);
     buffer.set_style(area, Style::default().fg(palette.text).bg(palette.panel_bg));
+    let title = match state.status.as_ref().and_then(|s| s.runtime.as_ref()) {
+        Some(runtime) if !runtime.enabled => "Learn · pausado",
+        Some(runtime) if !runtime.external_allowed => "Learn · modelos aguardam autorização",
+        Some(runtime) if !runtime.worker_running => "Learn · revisor indisponível",
+        _ => "Learn · alterações automáticas",
+    };
     put_text(
         buffer,
         area.x.saturating_add(1),
         area.y,
         area.width.saturating_sub(1),
-        "Learn · alterações automáticas",
+        title,
         Style::default()
             .fg(palette.accent)
             .bg(palette.panel_bg)

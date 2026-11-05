@@ -1,4 +1,4 @@
-//! Explicit review is the only path from session data to the Obsidian vault.
+//! Journaled publication; automatic notes retain proposed epistemic status.
 use crate::*;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,25 @@ impl Index {
         project: &str,
         markdown: &str,
     ) -> Result<Proposal> {
+        self.propose_with_status(source, title, project, markdown, "validated")
+    }
+    pub fn propose_automatic(
+        &self,
+        source: &str,
+        title: &str,
+        project: &str,
+        markdown: &str,
+    ) -> Result<Proposal> {
+        self.propose_with_status(source, title, project, markdown, "proposed")
+    }
+    fn propose_with_status(
+        &self,
+        source: &str,
+        title: &str,
+        project: &str,
+        markdown: &str,
+        status: &str,
+    ) -> Result<Proposal> {
         if source.is_empty()
             || source.len() > 512
             || title.is_empty()
@@ -55,7 +74,7 @@ impl Index {
         if let Some(p) = self.proposal(&id)? {
             return Ok(p);
         }
-        let output=format!("---\nid: mercury-{id}\ntitle: {}\nproject: {}\ntype: learning\nstatus: validated\nsource: {}\n---\n\n{markdown}\n",serde_json::to_string(title)?,serde_json::to_string(project)?,serde_json::to_string(source)?);
+        let output=format!("---\nid: mercury-{id}\ntitle: {}\nproject: {}\ntype: learning\nstatus: {status}\nsource: {}\n---\n\n{markdown}\n",serde_json::to_string(title)?,serde_json::to_string(project)?,serde_json::to_string(source)?);
         let p = Proposal {
             id,
             source: source.into(),
@@ -131,7 +150,7 @@ impl Index {
                     }
                     p.state = "prepared".into();
                     self.write_proposal(&p)?;
-                    crate::store::private_write(&path, p.markdown.as_bytes())?;
+                    crate::store::publish_new(&path, p.markdown.as_bytes())?;
                     fs::File::open(&managed)?.sync_all()?;
                 }
                 p.state = "accepted".into();

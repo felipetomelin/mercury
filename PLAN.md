@@ -797,3 +797,20 @@ existente; configuração e inventário preservados. README EN/PT e guia atualiz
 release, smoke dos dois perfis, Clippy e formatação validados. Não há release
 binária/feed novo, nem qualificação Linux/Windows adicional. Evidências e limites
 em `docs/dev/local-install-010-review.md`; spec/plano em `specs/010-local-cli-install/`.
+
+
+## Aprendizado contínuo — spec 011 (2026-11-05)
+
+Learn/Knowledge default-on com escopo gerenciado e consentimento explícito para
+modelos. Automação de sessão encerrada → captura persistente → nota proposed →
+índice → GraphRAG; polling/debounce de alterações, orçamento diário, backoff,
+replay e publicação atômica sem sobrescrever edição humana. Learn usa roteamento
+Codex/Claude com custo desconhecido preservado como ausente. Estados e contadores
+ficam visíveis no CLI/TUI; schema de status atualizado de forma opcional.
+
+Validação: 4.156 testes workspace, checks focados finais e manutenção passaram,
+assim como Clippy/build/fmt. Smokes reais sintéticos comprovaram Learn/apply/undo e
+captura/grafo (9 entidades, 5 inferências, 2 resumos no corpus). Ativação pessoal
+com backup, config check, instalação dev e handoff preservou pane/PIDs/crons/vault.
+Detalhes e limites em docs/dev/continuous-learning-011-review.md e guia em
+docs/knowledge/continuous-learning.md. Gates externos continuam dispensados.

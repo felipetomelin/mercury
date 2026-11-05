@@ -3,7 +3,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use std::{
     fs,
     path::Path,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 pub struct Index {
@@ -59,10 +59,58 @@ pub(crate) fn private_write(path: &Path, bytes: &[u8]) -> Result<()> {
     file.sync_all()?;
     Ok(())
 }
+
+static PUBLISH_NEXT: AtomicUsize = AtomicUsize::new(0);
+/// Publish complete bytes without replacing a file created by another editor.
+pub(crate) fn publish_new(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let parent = path.parent().ok_or(Error::UnsafePath)?;
+    crate::ingest::check_components(parent)?;
+    let staging = parent.join(format!(
+        ".mercury-publish-{}-{}.tmp",
+        std::process::id(),
+        PUBLISH_NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = options.open(&staging)?;
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(staging.clone());
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    // Atomic create-new semantics; rename would overwrite a racing human file.
+    fs::hard_link(&staging, path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            Error::Conflict
+        } else {
+            Error::Io(e)
+        }
+    })?;
+    fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
 impl Index {
     pub fn open(root: &Path) -> Result<Self> {
         private_dir(root)?;
         let path = root.join("index.sqlite");
+        if !path.exists() {
+            match private_write(&path, b"") {
+                Ok(()) => {}
+                Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+        }
         for name in ["index.sqlite", "index.sqlite-wal", "index.sqlite-shm"] {
             let p = root.join(name);
             if let Ok(m) = fs::symlink_metadata(p) {
@@ -77,9 +125,6 @@ impl Index {
                     }
                 }
             }
-        }
-        if !path.exists() {
-            private_write(&path, b"")?;
         }
         let db = Connection::open(&path)?;
         db.busy_timeout(std::time::Duration::from_secs(2))?;
@@ -226,12 +271,29 @@ impl Index {
                 Ok((r.get(0)?, r.get(1)?))
             })
             .optional()?;
-        let count = derived
+        let graph = derived
             .as_ref()
-            .and_then(|(_, b)| serde_json::from_str::<serde_json::Value>(b).ok())
-            .and_then(|v| v["summaries"].as_array().map(Vec::len))
-            .unwrap_or(0);
+            .and_then(|(_, body)| serde_json::from_str::<serde_json::Value>(body).ok());
+        let count = graph
+            .as_ref()
+            .and_then(|g| g["summaries"].as_array())
+            .map_or(0, Vec::len);
+        let entities = graph
+            .as_ref()
+            .and_then(|g| g["entities"].as_array())
+            .map_or(0, Vec::len);
+        let inferred_relations = graph
+            .as_ref()
+            .and_then(|g| g["relations"].as_array())
+            .map_or(0, |relations| {
+                relations
+                    .iter()
+                    .filter(|r| r["origin"] == "inferred")
+                    .count()
+            });
         Ok(Status {
+            entities,
+            inferred_relations,
             schema_version: 3,
             revision: s.as_ref().map_or(String::new(), |s| s.revision.clone()),
             notes: s.as_ref().map_or(0, |s| s.notes.len()),

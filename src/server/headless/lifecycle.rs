@@ -55,6 +55,22 @@ impl HeadlessServer {
         }
 
         self.handoff_in_progress = true;
+        let knowledge_stopped = self
+            .app
+            .knowledge_automation
+            .take()
+            .is_none_or(|mut worker| worker.stop(Duration::from_secs(3)));
+        let learn_stopped = self
+            .app
+            .learn
+            .take()
+            .is_none_or(|mut worker| worker.stop_for_handoff());
+        if !knowledge_stopped || !learn_stopped {
+            self.rollback_handoff_before_commit(&socket_path, &[]);
+            return Err(io::Error::other(
+                "background automation did not stop; retry handoff shortly",
+            ));
+        }
         self.disconnect_all_clients_for_handoff();
         let _ = reject_pending_client_connections(&self.client_listener);
 
@@ -284,6 +300,12 @@ impl HeadlessServer {
         }
         self.handoff_in_progress = false;
         let _ = std::fs::remove_file(socket_path);
+        if let Err(error) = self.app.enable_knowledge_automation() {
+            warn!(%error,"Knowledge automation could not resume after handoff rollback");
+        }
+        if let Err(error) = self.app.enable_learn() {
+            warn!(%error,"Learn could not resume after handoff rollback");
+        }
     }
 
     #[cfg(unix)]

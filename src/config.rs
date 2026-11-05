@@ -24,7 +24,7 @@ pub use self::{
         BindingConfig, CommandKeybindConfig, CustomCommandAction, CustomCommandKeybind,
         IndexedKeybind, KeyCombo, Keybinds, LiveKeybindConfig,
     },
-    learn::LearnConfig,
+    learn::{LearnConfig, LearnTargetConfig, LearnTargetKind},
     model::{
         validated_sidebar_bounds, AgentPanelSortConfig, Config, ConfigReloadReport,
         ConfigReloadStatus, HostCursorModeConfig, NewTerminalCwdConfig, PaneBordersConfig,

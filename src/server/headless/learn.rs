@@ -29,6 +29,7 @@ pub(super) fn dispatch(
     request: Request,
     respond_to: mpsc::Sender<String>,
     app_events: tokio::sync::mpsc::Sender<crate::events::AppEvent>,
+    runtime: crate::api::schema::LearnRuntimeInfo,
 ) {
     if PENDING.fetch_add(1, Ordering::AcqRel) >= MAX_PENDING {
         PENDING.fetch_sub(1, Ordering::AcqRel);
@@ -47,7 +48,8 @@ pub(super) fn dispatch(
             }
         }
         let _pending = PendingGuard;
-        let response = match SERIAL.get_or_init(|| Mutex::new(())).lock() {
+        let status_request = matches!(request.method, Method::LearnStatus(_));
+        let mut response = match SERIAL.get_or_init(|| Mutex::new(())).lock() {
             Ok(_guard) => handle_at_with_events(
                 &crate::session::data_dir().join("learn"),
                 request,
@@ -59,6 +61,14 @@ pub(super) fn dispatch(
                 "Learn ledger is unavailable",
             ),
         };
+        if status_request {
+            if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&response) {
+                if value["result"]["status"].is_object() {
+                    value["result"]["status"]["runtime"] = serde_json::json!(runtime);
+                    response = value.to_string();
+                }
+            }
+        }
         let _ = respond_to.send(response);
     });
 }
@@ -367,6 +377,7 @@ fn to_status(
     recent_metrics: Vec<LearnObservedMetricInfo>,
 ) -> LearnStatusInfo {
     LearnStatusInfo {
+        runtime: None,
         ledger_present,
         changes: LearnChangeCounts {
             prepared: status.changes.prepared,

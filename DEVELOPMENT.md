@@ -14,11 +14,10 @@ To install the development build as the `mercury` command, run
 `bash scripts/install-local.sh --profile dev`. For an existing debug build,
 add `--no-build`. See [installation and updating](docs/dev/local-install.md).
 You can also run `target/debug/mercury` directly from this checkout.
-Usage, themes, crons, routing, history, and the opt-in Learn flow are implemented
+Usage, themes, crons, routing, history, and managed Learn automation are implemented
 locally. Real Claude/Codex smokes and visual inspection are left to the user;
 SonarQube/Veracode/Wiz and quantitative coverage were explicitly waived for
-this local delivery, not reported as passing. Keep Learn off while trying it
-on temporary targets first. Teams interaction is in the backlog; Mercury does
+this local delivery, not reported as passing. Use temporary explicit targets when testing writes. Teams interaction is in the backlog; Mercury does
 not send email. Do not use `mercury update` yet: this local fork has no
 published Mercury release feed. Windows distribution still requires platform qualification; pinned third-party
 notices/licenses were restored, as documented in the local phase8 review.
@@ -41,8 +40,8 @@ target/debug/mercury cron doctor
 `config check` works without a server. `history search` and `cron doctor` return
 `server_not_running` if the UI/server is not running. The UI opens or restores
 a persistent terminal session, including any saved session. Its Usage, Crons,
-History, and Learn tabs can be inspected locally; Learn review remains off
-unless you explicitly enable and configure it. `route preview --stdin` is
+History, and Learn tabs can be inspected locally. Learn/Knowledge default to
+enabled with managed scope; external model processing requires explicit config. `route preview --stdin` is
 read-only; `route submit` and `cron run` intentionally start agents/jobs.
 
 If `mercury status` says `restart_needed: yes` or
@@ -69,7 +68,9 @@ job remains scheduled until removed; it does not send email.
 Learn inspection is available through `mercury learn list|status|show|diff|undo`
 and the local Learn tab (`prefix+shift+u`). The tab shows redacted audit data;
 undo requires a second `u` on the same item and refuses to replace later human
-edits. Automatic review remains opt-in through `[learn].enabled = true`.
+edits. Automatic review uses `[learn].allow_external = true`; explicit false on enabled
+pauses Learn. No targets selects only managed memory. See
+[continuous learning](docs/knowledge/continuous-learning.md).
 The Learn tab's `m` page shows recent provider-reported tokens/cost from
 opted-in headless cron runs. An explicit `[learn.job_targets]` mapping links a
 job UUID to one allowlisted Learn target. When exactly one applied change is

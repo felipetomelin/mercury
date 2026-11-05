@@ -1,4 +1,5 @@
 //! Local knowledge is evidence, never execution authority.
+pub mod automation;
 pub mod backend;
 pub mod capture;
 pub mod graph;

@@ -73,10 +73,40 @@ pub(super) fn render(
         lines.push("Memória desativada · configure [knowledge] para começar".into());
     } else if let Some(index) = state.data["index"].as_object() {
         lines.push("Memória local ativa".into());
+        if let Some(automation) = state.data["automation"].as_object() {
+            let state_label = if automation.get("enabled").and_then(|v| v.as_bool()) != Some(true) {
+                "pausada"
+            } else if automation.get("external_allowed").and_then(|v| v.as_bool()) != Some(true) {
+                "indexação local · modelos aguardam configuração"
+            } else {
+                match state.data["automation"]["state"]["runtime"]["state"].as_str() {
+                    Some("error") => "atenção: consulte o diagnóstico abaixo",
+                    Some("watching") => "ativa · monitorando notas e sessões",
+                    _ => "iniciando ou processando",
+                }
+            };
+            lines.push(format!("Automação: {state_label}"));
+            let captures = &state.data["automation"]["state"]["captures"];
+            lines.push(format!(
+                "Capturas: {} concluídas · {} pendentes · {} falhas",
+                captures["done"].as_u64().unwrap_or(0),
+                captures["queued"].as_u64().unwrap_or(0)
+                    + captures["published"].as_u64().unwrap_or(0),
+                captures["failed"].as_u64().unwrap_or(0)
+            ));
+            if let Some(error) = state.data["automation"]["state"]["runtime"]["error"].as_str() {
+                lines.push(error.into());
+            }
+            if let Some(error) = state.data["automation"]["state"]["graph"]["error"].as_str() {
+                lines.push(format!("GraphRAG aguardando recuperação: {error}"));
+            }
+        }
         for (key, label) in [
             ("notes", "Notas"),
             ("chunks", "Trechos"),
-            ("relations", "Relações"),
+            ("relations", "Relações explícitas"),
+            ("entities", "Entidades"),
+            ("inferred_relations", "Relações inferidas"),
             ("summaries", "Resumos"),
         ] {
             lines.push(format!(
@@ -85,7 +115,10 @@ pub(super) fn render(
             ));
         }
         if index.get("notes").and_then(|v| v.as_u64()) == Some(0) {
-            lines.push("Vault vazio · crie notas Markdown no Obsidian e indexe pelo CLI".into());
+            lines.push(
+                "Vault vazio · adicione notas ou conclua uma sessão para capturar aprendizados"
+                    .into(),
+            );
         }
     } else if state.loading {
         lines.push("Consultando memória…".into());

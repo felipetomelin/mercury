@@ -45,7 +45,7 @@ Veja as <a href="assets/mercury/README.md">fontes e a reprodução das imagens</
 | **Agendamentos guiados** | Escolha dias úteis, agenda diária/mensal, intervalos ou execução única; expressões avançadas continuam disponíveis. |
 | **Roteamento de agentes** | Aplique regras para tarefas Codex/Claude e inspecione a escolha antes de enviá-las. |
 | **Memória Markdown + GraphRAG** | Indexe um vault compatível com Obsidian e gere respostas com fontes, mediante acesso a modelos configurado explicitamente. |
-| **Histórico e Learn** | Encontre conversas anteriores e habilite melhorias em alvos permitidos, com backup, auditoria e undo. |
+| **Histórico e Learn** | Encontre conversas e mantenha a memória gerenciada atualizada, com backup, auditoria e undo. |
 
 ## Comece aqui
 
@@ -115,6 +115,12 @@ por modelos e respostas geradas usam os CLIs autenticados Codex/Claude somente
 com acesso externo configurado explicitamente. As respostas trazem referências;
 relações inferidas permanecem distintas das decisões revisadas.
 
+Com o processamento externo configurado, sessões encerradas geram notas propostas,
+indexação e GraphRAG automaticamente. Um monitor acompanha alterações no vault;
+fila persistente, retentativas e teto diário de chamadas controlam a automação.
+Configurações explícitas `enabled = false` continuam sendo respeitadas.
+
+→ [Aprendizado contínuo e automação](docs/knowledge/continuous-learning.md)
 → [Configuração de Knowledge e GraphRAG](docs/knowledge/README.md)
 
 ## Estado do projeto
@@ -131,7 +137,9 @@ Projeto independente em desenvolvimento ativo, baseado no
 Desconectar a interface preserva processos enquanto o servidor continua ativo.
 Reiniciar servidor ou máquina permite restaurar layout/sessões salvos, mas não
 preserva os processos originais. As cotas dependem do que cada conta/CLI informa.
-Learn começa desativado. O [relatório de validação](docs/dev/usage-cron-009-review.md)
+Learn e Knowledge ficam habilitados por padrão; processamento por modelos exige
+configuração explícita. Veja [aprendizado contínuo](docs/knowledge/continuous-learning.md).
+O [relatório de validação de Usage/Crons](docs/dev/usage-cron-009-review.md)
 descreve o escopo testado e as limitações.
 
 ## Documentação

@@ -111,6 +111,80 @@ impl Drop for Fixture {
 }
 
 #[tokio::test]
+async fn managed_memory_cannot_be_promoted_to_a_validated_decision_by_model() {
+    let mut fixture = Fixture::new();
+    fixture.target = fixture.root.join("LearnMemory.md");
+    fs::write(&fixture.target, "Before").unwrap();
+    let reviewer = fixture.reviewer(":");
+    let script = fs::read_to_string(&fixture.script)
+        .unwrap()
+        .replace(
+            "\"target_id\":\"instructions\"",
+            "\"target_id\":\"mercury-memory\"",
+        )
+        .replace(
+            "\"content\":\"After\"",
+            &format!(
+                "\"content\":{}",
+                json!("---\ntype: decision\nstatus: validated\n---\nA lesson.")
+            ),
+        );
+    fs::write(&fixture.script, script).unwrap();
+    let policy = Policy::new(vec![TargetPolicy {
+        id: "mercury-memory".into(),
+        path: fixture.target.clone(),
+        kind: TargetKind::Memory,
+        max_bytes: 4096,
+    }])
+    .unwrap();
+    let mut changes = fixture.changes();
+    let result = review_session(
+        fixture.session(None),
+        &policy,
+        || true,
+        &reviewer,
+        &mut changes,
+    )
+    .await
+    .unwrap();
+    let content = fs::read_to_string(&fixture.target).unwrap();
+    assert!(content.starts_with("---\ntype: learning\nstatus: proposed\n---\n"));
+    assert!(!content.contains("status: validated"));
+    changes.undo(&result.applied_ids[0]).unwrap();
+    assert_eq!(fs::read_to_string(&fixture.target).unwrap(), "Before");
+}
+
+#[tokio::test]
+async fn disabling_during_review_cancels_before_any_target_write() {
+    use std::sync::{atomic::AtomicBool, Arc};
+    let fixture = Fixture::new();
+    let marker = fixture.root.join("started");
+    let reviewer = fixture.reviewer(&format!("touch '{}'; sleep 20", marker.display()));
+    let enabled = Arc::new(AtomicBool::new(true));
+    let gate = enabled.clone();
+    let stop = tokio::spawn(async move {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while !marker.exists() {
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        gate.store(false, Ordering::Release);
+    });
+    let mut changes = fixture.changes();
+    let result = review_session(
+        fixture.session(None),
+        &fixture.policy(),
+        || enabled.load(Ordering::Acquire),
+        &reviewer,
+        &mut changes,
+    )
+    .await;
+    stop.await.unwrap();
+    assert!(matches!(result, Err(PipelineError::Disabled)));
+    assert_eq!(fs::read(&fixture.target).unwrap(), b"Before");
+}
+
+#[tokio::test]
 async fn completed_fixture_session_applies_and_undoes_exact_original_bytes() {
     let fixture = Fixture::new();
     let mut changes = fixture.changes();
@@ -125,7 +199,7 @@ async fn completed_fixture_session_applies_and_undoes_exact_original_bytes() {
     .unwrap();
 
     assert_eq!(outcome.applied_ids.len(), 1);
-    assert_eq!(outcome.observed_cost_usd, 0.01);
+    assert_eq!(outcome.observed_cost_usd, Some(0.01));
     assert_eq!(fs::read(&fixture.target).unwrap(), b"After");
     changes.undo(&outcome.applied_ids[0]).unwrap();
     assert_eq!(fs::read(&fixture.target).unwrap(), b"Before");

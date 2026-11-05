@@ -5,8 +5,6 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::Arc;
-#[cfg(unix)]
-use std::time::Duration;
 
 #[cfg(unix)]
 use mercury_learn::curator;
@@ -218,11 +216,22 @@ impl LearnWorker {
         reviewer_config: ReviewerConfig,
         app_events: Option<tokio::sync::mpsc::Sender<crate::events::AppEvent>>,
     ) -> Result<Self, String> {
+        let reviewer = ClaudeReviewer::new(reviewer_config)
+            .map_err(|_| "invalid Learn reviewer configuration".to_string())?;
+        Self::start_with_reviewer(root, config, reviewer, app_events)
+    }
+
+    pub(crate) fn start_with_reviewer<
+        R: mercury_learn::reviewer::SessionReviewer + Send + 'static,
+    >(
+        root: &Path,
+        config: &crate::config::LearnConfig,
+        reviewer: R,
+        app_events: Option<tokio::sync::mpsc::Sender<crate::events::AppEvent>>,
+    ) -> Result<Self, String> {
         config.validate().map_err(str::to_owned)?;
         let policy = Policy::new(config.target_policies())
             .map_err(|_| "invalid Learn target policy".to_string())?;
-        let reviewer = ClaudeReviewer::new(reviewer_config)
-            .map_err(|_| "invalid Learn reviewer configuration".to_string())?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -455,6 +464,24 @@ impl LearnWorker {
         self.enabled.store(false, Ordering::Release);
     }
 
+    pub(crate) fn stop_for_handoff(&mut self) -> bool {
+        self.disable();
+        self.weekly_stop.take();
+        self.sender.take();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while (self.handle.as_ref().is_some_and(|h| !h.is_finished())
+            || self
+                .weekly_handle
+                .as_ref()
+                .is_some_and(|h| !h.is_finished()))
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        self.handle.as_ref().is_none_or(|h| h.is_finished())
+            && self.weekly_handle.as_ref().is_none_or(|h| h.is_finished())
+    }
+
     pub fn shutdown(mut self) {
         self.disable();
         self.weekly_stop.take();
@@ -606,7 +633,7 @@ fn run_weekly_curation(_: &Path, _: &Policy, _: &str, _: &AtomicBool) -> bool {
 
 impl super::App {
     pub(crate) fn enable_learn(&mut self) -> Result<(), String> {
-        if !self.learn_config.enabled || self.learn.is_some() {
+        if !self.learn_config.enabled || !self.learn_config.allow_external || self.learn.is_some() {
             return Ok(());
         }
         #[cfg(not(unix))]
@@ -615,25 +642,84 @@ impl super::App {
         #[cfg(unix)]
         {
             let data_dir = crate::session::data_dir();
+            let mut config = self.learn_config.clone();
+            if config.targets.is_empty() {
+                let managed = if self.knowledge_config.enabled {
+                    self.knowledge_config
+                        .prepare_at(&data_dir.join("knowledge"))
+                        .map_err(|e| e.to_string())?
+                        .vault
+                        .join("Mercury")
+                } else {
+                    data_dir.join("learn-memory")
+                };
+                mercury_learn::storage::ensure_private_dir(&managed)
+                    .map_err(|_| "Learn managed memory directory unavailable".to_string())?;
+                let path = managed.join("LearnMemory.md");
+                if !path.exists() {
+                    use std::{io::Write, os::unix::fs::OpenOptionsExt};
+                    let result = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .mode(0o600)
+                        .custom_flags(libc::O_NOFOLLOW)
+                        .open(&path);
+                    match result {
+                        Ok(mut file) => {
+                            file.write_all(b"---\ntype: learning\nstatus: proposed\n---\n# Mercury managed memory\n\nNo durable lessons recorded yet.\n")
+                                .and_then(|_|file.sync_all()).map_err(|_|"Learn memory initialization failed".to_string())?;
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                        Err(_) => return Err("Learn managed memory unavailable".into()),
+                    }
+                }
+                config.targets.push(crate::config::LearnTargetConfig {
+                    id: "mercury-memory".into(),
+                    path,
+                    kind: crate::config::LearnTargetKind::Memory,
+                    max_bytes: 8 * 1024,
+                });
+            }
             let workdir = data_dir.join("learn-reviewer");
             mercury_learn::storage::ensure_private_dir(&workdir)
                 .map_err(|_| "Learn private reviewer directory unavailable".to_string())?;
-            let executable = find_claude_executable()
-                .ok_or_else(|| "Claude CLI is not available for Learn".to_string())?;
-            let reviewer_config = ReviewerConfig {
-                executable,
-                workdir,
-                model: self.learn_config.model.clone(),
-                max_budget_usd: self.learn_config.max_budget_usd,
-                timeout: Duration::from_secs(self.learn_config.timeout_secs),
-                max_input_bytes: 256 * 1024,
-                max_stdout_bytes: 64 * 1024,
-                max_stderr_bytes: 8 * 1024,
+            let mut native_config = self.knowledge_config.clone();
+            native_config.allow_external = true; // authorized separately by learn.allow_external
+            native_config.max_call_budget_usd = config.max_budget_usd;
+            native_config.timeout_secs = config.timeout_secs;
+            native_config.max_model_calls = 2;
+            if native_config.allowed_providers.is_empty() {
+                native_config.allowed_providers = vec!["claude".into(), "codex".into()];
+            }
+            native_config.allowed_providers.retain(|provider| {
+                if native_config.executables.contains_key(provider) {
+                    return true;
+                }
+                if let Some(path) = find_native_executable(provider) {
+                    native_config.executables.insert(provider.clone(), path);
+                    true
+                } else {
+                    false
+                }
+            });
+            if native_config.allowed_providers.is_empty() {
+                return Err("No Codex/Claude CLI available for Learn".into());
+            }
+            native_config
+                .models
+                .entry("claude".into())
+                .or_insert(config.model.clone());
+            let reviewer = super::learn_native::RoutedReviewer {
+                config: native_config,
+                root: workdir,
+                budget_root: data_dir.join("knowledge"),
+                route: self.route.clone(),
+                limits: self.automation_limits.clone(),
             };
-            let worker = LearnWorker::start_reviewing(
+            let worker = LearnWorker::start_with_reviewer(
                 &data_dir.join("learn"),
-                &self.learn_config,
-                reviewer_config,
+                &config,
+                reviewer,
                 Some(self.event_tx.clone()),
             )?;
             self.learn = Some(worker);
@@ -643,12 +729,12 @@ impl super::App {
 }
 
 #[cfg(unix)]
-fn find_claude_executable() -> Option<PathBuf> {
+fn find_native_executable(name: &str) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
 
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path).find_map(|directory| {
-        let candidate = directory.join("claude");
+        let candidate = directory.join(name);
         let metadata = std::fs::metadata(&candidate).ok()?;
         if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
             return None;

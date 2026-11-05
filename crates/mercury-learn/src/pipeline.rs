@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::policy::{Policy, PolicyError};
-use crate::reviewer::{ClaudeReviewer, ReviewError, ReviewTarget};
+use crate::reviewer::{ReviewError, ReviewTarget, SessionReviewer};
 use crate::transcript::{self, Limits, Provider, TranscriptError};
 use crate::{review_snapshots, ChangeError, Changes};
 
@@ -32,14 +32,14 @@ pub enum PipelineError {
 #[derive(Debug)]
 pub struct ReviewOutcome {
     pub applied_ids: Vec<String>,
-    pub observed_cost_usd: f64,
+    pub observed_cost_usd: Option<f64>,
 }
 
 pub async fn review_session(
     session: SessionReview<'_>,
     policy: &Policy,
     is_enabled: impl Fn() -> bool,
-    reviewer: &ClaudeReviewer,
+    reviewer: &dyn SessionReviewer,
     changes: &mut Changes,
 ) -> Result<ReviewOutcome, PipelineError> {
     if !is_enabled() {
@@ -66,13 +66,15 @@ pub async fn review_session(
             max_bytes: snapshot.max_bytes,
         })
         .collect::<Vec<_>>();
-    let result = reviewer
-        .review(&transcript, &targets)
-        .await
-        .map_err(PipelineError::Reviewer)?;
+    let result = tokio::select! {
+        result = reviewer.review(&transcript, &targets) => result.map_err(PipelineError::Reviewer)?,
+        _ = async {
+            while is_enabled() { tokio::time::sleep(std::time::Duration::from_millis(25)).await; }
+        } => return Err(PipelineError::Disabled),
+    };
     let mut applied_ids = Vec::with_capacity(result.proposals.len());
     let mut cron_after_hashes = HashMap::new();
-    for proposal in result.proposals {
+    for mut proposal in result.proposals {
         if !is_enabled() {
             return Err(PipelineError::Disabled);
         }
@@ -81,6 +83,16 @@ pub async fn review_session(
             .iter()
             .find(|target| target.id == proposal.target_id)
             .ok_or(PipelineError::Policy(PolicyError::UnknownTarget))?;
+        if proposal.target_id == "mercury-memory"
+            && target.kind == crate::policy::TargetKind::Memory
+        {
+            let body = proposal
+                .content
+                .strip_prefix("---\n")
+                .and_then(|s| s.split_once("\n---\n").map(|(_, body)| body))
+                .unwrap_or(&proposal.content);
+            proposal.content = format!("---\ntype: learning\nstatus: proposed\n---\n{body}");
+        }
         let snapshot_hash = snapshots
             .iter()
             .find(|snapshot| snapshot.target_id == proposal.target_id)

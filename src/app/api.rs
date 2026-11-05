@@ -133,6 +133,7 @@ impl App {
         limits: Vec<mercury_usage::ProviderLimits>,
     ) -> bool {
         let changed = self.apply_usage_refreshed(sessions, limits);
+        self.refresh_automation_limits();
         if changed {
             self.render_dirty.request_generic();
             self.render_notify.notify_one();
@@ -168,6 +169,7 @@ impl App {
         error: Option<String>,
     ) -> bool {
         let changed = self.apply_claude_account_usage(limits, identity, error);
+        self.refresh_automation_limits();
         if changed {
             self.render_dirty.request_generic();
             self.render_notify.notify_one();
@@ -182,6 +184,7 @@ impl App {
         error: Option<String>,
     ) -> bool {
         let changed = self.apply_codex_usage_refreshed(limits, costs, error);
+        self.refresh_automation_limits();
         if changed {
             self.render_dirty.request_generic();
             self.render_notify.notify_one();
@@ -588,10 +591,15 @@ impl App {
         };
         let previous_toast = self.state.toast.clone();
         let mut pane_updates = self.state.handle_app_event(ev);
-        if self.learn_config.enabled {
-            if let (Some(worker), Some(trigger)) = (self.learn.as_ref(), codex_exit_trigger) {
+        if let Some(trigger) = codex_exit_trigger {
+            if self.knowledge_automation.is_some() && !self.capture_completed_session(&trigger) {
+                tracing::warn!("Knowledge automatic capture queue unavailable or full");
+            }
+            if let Some(worker) = self.learn.as_ref().filter(|_| self.learn_config.enabled) {
                 let _ = worker.submit(trigger);
             }
+        }
+        if self.learn_config.enabled {
             if let (Some(worker), Some(trigger)) = (self.learn.as_ref(), codex_turn_probe) {
                 let _ = worker.submit(trigger);
             }

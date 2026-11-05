@@ -86,7 +86,25 @@ impl From<std::io::Error> for ReviewError {
 #[derive(Debug, Clone)]
 pub struct ReviewResult {
     pub proposals: Vec<Proposal>,
-    pub observed_cost_usd: f64,
+    pub observed_cost_usd: Option<f64>,
+}
+
+pub trait SessionReviewer {
+    fn review<'a>(
+        &'a self,
+        transcript: &'a Transcript,
+        targets: &'a [ReviewTarget],
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ReviewResult, ReviewError>> + 'a>>;
+}
+impl SessionReviewer for ClaudeReviewer {
+    fn review<'a>(
+        &'a self,
+        transcript: &'a Transcript,
+        targets: &'a [ReviewTarget],
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ReviewResult, ReviewError>> + 'a>>
+    {
+        Box::pin(ClaudeReviewer::review(self, transcript, targets))
+    }
 }
 
 #[derive(Deserialize)]
@@ -298,7 +316,7 @@ async fn read_limited(
     }
 }
 
-fn build_input(
+pub fn build_input(
     transcript: &Transcript,
     targets: &[ReviewTarget],
     max_bytes: usize,
@@ -374,7 +392,7 @@ fn build_input(
     Ok(input)
 }
 
-fn output_schema(targets: &[ReviewTarget]) -> Value {
+pub fn output_schema(targets: &[ReviewTarget]) -> Value {
     let ids: Vec<&str> = targets.iter().map(|target| target.id.as_str()).collect();
     json!({
         "type":"object",
@@ -423,6 +441,19 @@ fn parse_result(
     let structured = envelope
         .get("structured_output")
         .ok_or(ReviewError::InvalidResponse)?;
+    parse_structured(structured, transcript, targets, Some(cost), max_budget_usd)
+}
+
+pub fn parse_structured(
+    structured: &Value,
+    transcript: &Transcript,
+    targets: &[ReviewTarget],
+    observed_cost_usd: Option<f64>,
+    max_budget_usd: f64,
+) -> Result<ReviewResult, ReviewError> {
+    if observed_cost_usd.is_some_and(|c| !c.is_finite() || c < 0.0 || c > max_budget_usd + 1e-9) {
+        return Err(ReviewError::OverBudget);
+    }
     let output: StructuredOutput =
         serde_json::from_value(structured.clone()).map_err(|_| ReviewError::InvalidResponse)?;
     if output.proposals.len() > MAX_PROPOSALS {
@@ -463,7 +494,7 @@ fn parse_result(
     }
     Ok(ReviewResult {
         proposals,
-        observed_cost_usd: cost,
+        observed_cost_usd,
     })
 }
 
@@ -481,6 +512,9 @@ fn sensitive(value: &str) -> bool {
         "-----begin private key-----",
         "sk-ant-",
         "ghp_",
+        "github_pat_",
+        "-----begin rsa private key-----",
+        "-----begin openssh private key-----",
         "authorization: bearer ",
         "akia",
     ]

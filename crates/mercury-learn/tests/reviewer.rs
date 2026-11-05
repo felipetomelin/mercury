@@ -106,7 +106,7 @@ async fn reviewer_returns_structured_proposal_with_trusted_source() {
     assert_eq!(result.proposals.len(), 1);
     assert_eq!(result.proposals[0].source, "codex/session-1");
     assert_eq!(result.proposals[0].content, "After");
-    assert_eq!(result.observed_cost_usd, 0.03);
+    assert_eq!(result.observed_cost_usd, Some(0.03));
     let args = fs::read_to_string(fixture.root.join("args")).unwrap();
     assert!(args.contains("--restricted\n"));
     assert!(args.contains("--strict-mcp-config\n"));

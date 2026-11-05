@@ -114,6 +114,8 @@ pub struct LearnTriggerInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct LearnStatusInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<LearnRuntimeInfo>,
     pub ledger_present: bool,
     pub changes: LearnChangeCounts,
     pub triggers: LearnTriggerCounts,
@@ -123,6 +125,13 @@ pub struct LearnStatusInfo {
     /// Bounded, provider-observed headless runs; these are not an efficacy comparison.
     #[serde(default)]
     pub recent_metrics: Vec<LearnObservedMetricInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct LearnRuntimeInfo {
+    pub enabled: bool,
+    pub external_allowed: bool,
+    pub worker_running: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

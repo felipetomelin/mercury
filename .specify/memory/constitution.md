@@ -67,4 +67,15 @@ PagueVeloz skills govern execution. Existing dirty-worktree changes are user
 work and must be preserved. Amend this constitution only to reflect a confirmed
 project decision, with its source and date.
 
-**Version**: 1.1.0 | **Recorded**: 2026-10-06 | **Amended**: 2026-10-29
+## Continuous-learning default decision
+
+User decision on 2026-11-05 (this conversation, spec 011): Learn and Knowledge
+are enabled by default. With no explicit targets/vault, writes are confined to
+Mercury-managed memory/notes. Human instruction files, routing and crons still
+require explicit exact targets. External processing remains off in new defaults;
+the user authorized explicit Codex/Claude processing for this personal activation.
+Generated notes retain proposed status and cannot impersonate human validation.
+The user's false settings remain kill-switches. This supersedes default-off
+statements in historical feature reports, without relaxing the writer policy.
+
+**Version**: 1.2.0 | **Recorded**: 2026-10-06 | **Amended**: 2026-11-05

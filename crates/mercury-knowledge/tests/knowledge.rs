@@ -219,6 +219,10 @@ fn graphrag_extracts_summarizes_answers_and_invalidates_on_change() {
     assert!(!d.entities.is_empty());
     assert!(!d.summaries.is_empty());
     assert!(d.relations.iter().all(|r| r.origin == "inferred"));
+    let status = f.index.status().unwrap();
+    assert_eq!(status.entities, d.entities.len());
+    assert_eq!(status.inferred_relations, d.relations.len());
+    assert_eq!(status.relations, 0);
     for mode in ["local", "global"] {
         let a = f
             .index
@@ -234,6 +238,7 @@ fn graphrag_extracts_summarizes_answers_and_invalidates_on_change() {
     }
     f.note("A.md", "Changed facts");
     f.sync();
+    assert_eq!(f.index.status().unwrap().inferred_relations, 0);
     assert!(f
         .index
         .ask("Alpha", "local", &Filter::default(), &Fake, &cancel, 32_000)

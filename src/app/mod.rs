@@ -21,6 +21,7 @@ mod ids;
 // T010 still needs the observed-session and weekly signal producers.
 #[allow(dead_code)]
 pub(crate) mod learn;
+mod learn_native;
 mod popup;
 mod runtime;
 mod session;
@@ -139,6 +140,8 @@ pub struct App {
     pub(crate) learn: Option<learn::LearnWorker>,
     pub(crate) learn_config: crate::config::LearnConfig,
     pub(crate) knowledge_config: mercury_knowledge::Config,
+    pub(crate) automation_limits: Arc<std::sync::Mutex<Vec<mercury_usage::ProviderLimits>>>,
+    pub(crate) knowledge_automation: Option<crate::server::headless::knowledge::AutomationWorker>,
     pub(crate) learn_transcripts: HashMap<
         (crate::layout::PaneId, mercury_learn::transcript::Provider),
         learn::ObservedTranscript,
@@ -647,6 +650,8 @@ impl App {
             learn: None,
             learn_config: config.learn.clone(),
             knowledge_config: config.knowledge.clone(),
+            automation_limits: Arc::new(std::sync::Mutex::new(Vec::new())),
+            knowledge_automation: None,
             learn_transcripts: HashMap::new(),
             learn_excluded_sessions: HashMap::new(),
             pending_api_worktree_creates: HashMap::new(),
@@ -1037,13 +1042,23 @@ impl App {
         if !invalid_section("usage") {
             self.usage.apply_config(&config.usage);
         }
+        let automation_changed = (!invalid_section("knowledge")
+            && self.knowledge_config != config.knowledge)
+            || (!invalid_section("route")
+                && format!("{:?}", self.route) != format!("{:?}", config.route));
         if !invalid_section("route") {
             self.route = config.route.clone();
         }
         if !invalid_section("knowledge") {
             self.knowledge_config = config.knowledge.clone();
         }
-        if !invalid_section("learn") && self.learn_config != config.learn {
+        if automation_changed {
+            self.knowledge_automation.take();
+            if let Err(error) = self.enable_knowledge_automation() {
+                diagnostics.push(error);
+            }
+        }
+        if !invalid_section("learn") && (self.learn_config != config.learn || automation_changed) {
             if let Some(worker) = self.learn.take() {
                 worker.disable();
             }
@@ -1843,7 +1858,9 @@ mod tests {
             .unwrap(),
         );
 
-        let report = app.apply_live_config(&Config::default(), &[], &[], false);
+        let mut disabled = Config::default();
+        disabled.learn.enabled = false;
+        let report = app.apply_live_config(&disabled, &[], &[], false);
 
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
         assert!(!app.learn_config.enabled);

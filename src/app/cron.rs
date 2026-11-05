@@ -493,12 +493,19 @@ impl App {
     }
 
     pub(crate) fn start_cron_learn_usage_sync(&self) {
+        // Test/embedded apps must never reconcile against the user's global data.
+        if !self.policy.background_updates {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
         let Some(cron) = self.cron.as_ref() else {
             return;
         };
         let ledger_path = cron.ledger_path.clone();
         let learn_root = crate::session::data_dir().join("learn");
-        tokio::task::spawn_blocking(move || {
+        runtime.spawn_blocking(move || {
             let lock = LEARN_USAGE_SYNC.get_or_init(|| Mutex::new(()));
             let _guard = match lock.try_lock() {
                 Ok(guard) => guard,
@@ -955,6 +962,7 @@ mod tests {
             api_rx,
             crate::api::EventHub::default(),
         );
+        app.learn_config.enabled = false;
         app.enable_cron_at(&root).unwrap();
         let now = Instant::now();
         assert!(!app.cron_learn_usage_retry_due(now));

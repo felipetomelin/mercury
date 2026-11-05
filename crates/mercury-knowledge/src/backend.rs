@@ -27,6 +27,22 @@ pub trait Model {
     }
     fn structured(&self, task: &str, input: &Value, schema: &Value) -> Result<Value>;
 }
+/// Conservative screening for automation, not exhaustive secret detection.
+pub fn contains_recognizable_secret(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    [
+        "-----begin private key-----",
+        "-----begin rsa private key-----",
+        "-----begin openssh private key-----",
+        "sk-ant-",
+        "ghp_",
+        "github_pat_",
+        "authorization: bearer ",
+        "akia",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+}
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 pub struct NativeModel<'a> {
     config: Config,
@@ -97,6 +113,7 @@ impl<'a> NativeModel<'a> {
         project: Option<&str>,
     ) -> Result<mercury_router::RouteDecision> {
         let mut route = self.route.clone();
+        let learning = task.starts_with("review reusable");
         let heavy = task.starts_with("answer") || task.starts_with("synthesize");
         let primary = if heavy {
             Provider::Codex
@@ -105,7 +122,7 @@ impl<'a> NativeModel<'a> {
         };
         route.rules.push(RouteRule {
             pattern: None,
-            tags: vec!["knowledge".into()],
+            tags: vec![if learning { "learn" } else { "knowledge" }.into()],
             project: None,
             provider: primary,
             model: None,
@@ -117,8 +134,10 @@ impl<'a> NativeModel<'a> {
             }],
         });
         let tags = [
-            "knowledge",
-            if heavy {
+            if learning { "learn" } else { "knowledge" },
+            if learning {
+                "review"
+            } else if heavy {
                 "answer"
             } else if task.starts_with("extract") {
                 "extract"

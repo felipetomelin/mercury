@@ -22,11 +22,41 @@ pub struct Config {
     pub timeout_secs: u64,
     pub max_context_chars: usize,
     pub projects: BTreeMap<String, Vec<String>>,
+    pub automation: AutomationConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AutomationConfig {
+    pub enabled: bool,
+    pub capture: bool,
+    pub publish: bool,
+    pub graph: bool,
+    pub poll_secs: u64,
+    pub debounce_secs: u64,
+    pub retry_secs: u64,
+    pub max_attempts: u32,
+    pub daily_model_calls: u32,
+}
+impl Default for AutomationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            capture: true,
+            publish: true,
+            graph: true,
+            poll_secs: 30,
+            debounce_secs: 5,
+            retry_secs: 60,
+            max_attempts: 5,
+            daily_model_calls: 64,
+        }
+    }
 }
 impl Default for Config {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             vault: PathBuf::new(),
             exclusions: vec![],
             allowed_providers: vec![],
@@ -43,12 +73,14 @@ impl Default for Config {
             timeout_secs: 60,
             max_context_chars: 32_000,
             projects: BTreeMap::new(),
+            automation: AutomationConfig::default(),
         }
     }
 }
 impl Config {
     pub fn validate(&self) -> crate::Result<()> {
         if self.enabled
+            && !self.vault.as_os_str().is_empty()
             && (!self.vault.is_absolute()
                 || self
                     .vault
@@ -56,6 +88,15 @@ impl Config {
                     .any(|c| matches!(c, std::path::Component::ParentDir)))
         {
             return Err(crate::Error::UnsafePath);
+        }
+        let a = &self.automation;
+        if !(1..=3600).contains(&a.poll_secs)
+            || !(1..=300).contains(&a.debounce_secs)
+            || !(1..=3600).contains(&a.retry_secs)
+            || !(1..=10).contains(&a.max_attempts)
+            || !(2..=4096).contains(&a.daily_model_calls)
+        {
+            return Err(crate::Error::Invalid("invalid knowledge automation limits"));
         }
         if !(1..=10_000).contains(&self.max_notes)
             || !(1..=1024 * 1024).contains(&self.max_note_bytes)
@@ -101,6 +142,19 @@ impl Config {
             ));
         }
         Ok(())
+    }
+
+    /// Resolve a default vault only within server-owned private state.
+    pub fn prepare_at(&self, root: &std::path::Path) -> crate::Result<Self> {
+        self.validate()?;
+        let mut config = self.clone();
+        if config.vault.as_os_str().is_empty() {
+            crate::store::private_dir(root)?;
+            config.vault = root.join("vault");
+            crate::store::private_dir(&config.vault)?;
+        }
+        crate::ingest::check_components(&config.vault)?;
+        Ok(config)
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,6 +227,10 @@ pub struct Status {
     pub notes: usize,
     pub chunks: usize,
     pub relations: usize,
+    #[serde(default)]
+    pub entities: usize,
+    #[serde(default)]
+    pub inferred_relations: usize,
     pub summaries: usize,
     pub model: Option<String>,
     pub updated: u64,

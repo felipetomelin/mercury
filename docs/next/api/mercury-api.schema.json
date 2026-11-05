@@ -9387,6 +9387,25 @@
           ],
           "type": "object"
         },
+        "LearnRuntimeInfo": {
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "external_allowed": {
+              "type": "boolean"
+            },
+            "worker_running": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled",
+            "external_allowed",
+            "worker_running"
+          ],
+          "type": "object"
+        },
         "LearnStatusInfo": {
           "properties": {
             "changes": {
@@ -9410,6 +9429,16 @@
                 "$ref": "#/schemas/success_response/$defs/LearnTriggerInfo"
               },
               "type": "array"
+            },
+            "runtime": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/LearnRuntimeInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "triggers": {
               "$ref": "#/schemas/success_response/$defs/LearnTriggerCounts"

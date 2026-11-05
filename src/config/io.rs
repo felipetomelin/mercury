@@ -131,6 +131,13 @@ pub(super) fn read_optional_config(path: &Path) -> std::io::Result<Option<String
     }
 }
 
+fn automation_disabled_defaults() -> Config {
+    let mut config = Config::default();
+    config.learn.enabled = false;
+    config.knowledge.enabled = false;
+    config
+}
+
 impl Config {
     pub fn load() -> LoadedConfig {
         let path = config_path();
@@ -146,7 +153,7 @@ impl Config {
             Err(err) => {
                 warn!(err = %err, "config read error, using defaults");
                 return LoadedConfig {
-                    config: Self::default(),
+                    config: automation_disabled_defaults(),
                     diagnostics: vec![format!("config read error: {err}; using defaults")],
                     invalid_sections: Vec::new(),
                 };
@@ -171,7 +178,10 @@ impl Config {
                     diagnostics.push(format!(
                         "invalid knowledge config: {err}; knowledge disabled"
                     ));
-                    config.knowledge = mercury_knowledge::Config::default();
+                    config.knowledge = mercury_knowledge::Config {
+                        enabled: false,
+                        ..Default::default()
+                    };
                 }
                 if let Err(err) = config.route.validate() {
                     diagnostics.push(format!("invalid route config: {err}; routing disabled"));
@@ -186,7 +196,7 @@ impl Config {
             Err(err) => {
                 warn!(err = %err, "config parse error, using defaults");
                 LoadedConfig {
-                    config: Self::default(),
+                    config: automation_disabled_defaults(),
                     diagnostics: vec![format!("config parse error: {err}; using defaults")],
                     invalid_sections: Vec::new(),
                 }
@@ -410,7 +420,10 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
             "invalid knowledge config: {err}; keeping current settings"
         ));
         invalid_sections.push("knowledge".into());
-        config.knowledge = mercury_knowledge::Config::default();
+        config.knowledge = mercury_knowledge::Config {
+            enabled: false,
+            ..Default::default()
+        };
     }
     load_live_section(
         table,
@@ -420,6 +433,14 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         &mut invalid_sections,
         |section| config.learn = section,
     );
+    if invalid_sections.iter().any(|s| s == "learn") {
+        config.learn.enabled = false;
+        config.learn.allow_external = false;
+    }
+    if invalid_sections.iter().any(|s| s == "knowledge") {
+        config.knowledge.enabled = false;
+        config.knowledge.allow_external = false;
+    }
     load_live_section(
         table,
         "route",

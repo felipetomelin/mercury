@@ -82,6 +82,9 @@ pub fn run_server() -> io::Result<()> {
             warn!(%error, "cron scheduler unavailable; retrying in background");
             server.app.cron_retry_at = Some(Instant::now() + Duration::from_secs(1));
         }
+        if let Err(error) = server.app.enable_knowledge_automation() {
+            warn!(%error, "Knowledge automation unavailable");
+        }
         if let Err(error) = server.app.enable_learn() {
             warn!(%error, "Learn worker unavailable; automatic review remains inactive");
         }
@@ -199,6 +202,9 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
         if let Err(error) = server.app.enable_cron() {
             warn!(%error, "cron scheduler will retry after handoff");
             server.app.cron_retry_at = Some(Instant::now() + Duration::from_secs(1));
+        }
+        if let Err(error) = server.app.enable_knowledge_automation() {
+            warn!(%error, "Knowledge automation unavailable");
         }
         if let Err(error) = server.app.enable_learn() {
             warn!(%error, "Learn worker unavailable after handoff; automatic review remains inactive");

@@ -91,6 +91,7 @@ impl App {
                 },
         );
         let changed = limits.is_some_and(|limits| self.usage.apply_route_codex_limits(limits));
+        self.refresh_automation_limits();
         for (request, respond_to) in std::mem::take(&mut self.pending_route_previews) {
             let Method::RoutePreview(params) = request.method else {
                 continue;

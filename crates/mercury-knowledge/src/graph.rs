@@ -74,8 +74,13 @@ pub struct Answer {
 fn grounded_schema() -> Value {
     json!({"type":"object","properties":{"insufficient":{"type":"boolean"},"claims":{"type":"array","maxItems":16,"items":{"type":"object","properties":{"text":{"type":"string"},"evidence":{"type":"array","items":{"type":"string"}}},"required":["text","evidence"],"additionalProperties":false}}},"required":["insufficient","claims"],"additionalProperties":false})
 }
-fn extraction_schema() -> Value {
-    json!({"type":"object","properties":{"keywords":{"type":"array","maxItems":32,"items":{"type":"string"}},"entities":{"type":"array","maxItems":50,"items":{"type":"object","properties":{"name":{"type":"string"},"kind":{"type":"string"},"evidence":{"type":"array","items":{"type":"string"}}},"required":["name","kind","evidence"],"additionalProperties":false}},"relations":{"type":"array","maxItems":100,"items":{"type":"object","properties":{"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["depends_on","decided_by","affected_by","resolved_by","documented_by","belongs_to","references"]},"evidence":{"type":"array","items":{"type":"string"}},"quote":{"type":"string","description":"Exact contiguous source quote containing BOTH source and target entity names and supporting the relationship"}},"required":["source","target","kind","evidence","quote"],"additionalProperties":false}}},"required":["keywords","entities","relations"],"additionalProperties":false})
+fn extraction_schema(chunk: &Chunk) -> Value {
+    let mut schema = json!({"type":"object","properties":{"keywords":{"type":"array","maxItems":32,"items":{"type":"string"}},"entities":{"type":"array","maxItems":50,"items":{"type":"object","properties":{"name":{"type":"string"},"kind":{"type":"string"},"evidence":{"type":"array","items":{"type":"string"}}},"required":["name","kind","evidence"],"additionalProperties":false}},"relations":{"type":"array","maxItems":100,"items":{"type":"object","properties":{"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["depends_on","decided_by","affected_by","resolved_by","documented_by","belongs_to","references"]},"evidence":{"type":"array","items":{"type":"string"}},"quote":{"type":"string","description":"Exact contiguous source quote containing BOTH source and target entity names and supporting the relationship"}},"required":["source","target","kind","evidence","quote"],"additionalProperties":false}}},"required":["keywords","entities","relations"],"additionalProperties":false});
+    for kind in ["entities", "relations"] {
+        schema["properties"][kind]["items"]["properties"]["evidence"]["items"]["enum"] =
+            json!([chunk.id]);
+    }
+    schema
 }
 fn checked(cancel: &AtomicBool) -> Result<()> {
     if cancel.load(Ordering::Relaxed) {
@@ -265,11 +270,11 @@ impl Index {
                 }
                 d.vectors.insert(chunk.id.clone(), vector);
                 let input = json!({"chunk_id":chunk.id,"text":chunk.text,"project":note.project});
-                let first=match self.cached_extraction(chunk,&model.fingerprint())? {Some(value)=>value,None=>model.structured("extract entities and typed relationships; entity names must be exact source substrings; every quote must contain both endpoint names",&input,&extraction_schema())?};
+                let first=match self.cached_extraction(chunk,&model.fingerprint())? {Some(value)=>value,None=>model.structured("extract entities and typed relationships; entity names must be exact source substrings; every quote must contain both endpoint names",&input,&extraction_schema(chunk))?};
                 let mut x: Extraction = serde_json::from_value(first.clone())?;
                 if let Err(error) = validate_extraction(&x, chunk) {
                     checked(cancel)?;
-                    x=serde_json::from_value(model.structured("extract and repair invalid evidence; omit any unsupported relationship; exact entity names and quotes only",&json!({"chunk":input,"validation_error":error.to_string(),"previous":first}),&extraction_schema())?)?;
+                    x=serde_json::from_value(model.structured("extract and repair invalid evidence; omit any unsupported relationship; exact entity names and quotes only",&json!({"chunk":input,"validation_error":error.to_string(),"previous":first}),&extraction_schema(chunk))?)?;
                 }
                 validate_extraction(&x, chunk)?;
                 self.cache_extraction(chunk, &model.fingerprint(), &serde_json::to_value(&x)?)?;

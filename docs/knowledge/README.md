@@ -3,7 +3,9 @@
 O Mercury indexa um vault Markdown local e usa os CLIs autenticados Codex/Claude
 para extração, resumos, expansão de consultas e respostas. Não usa Ollama nem
 instala modelos. Índices, propostas e jobs ficam no diretório privado de dados.
-O Obsidian pode permanecer fechado. A funcionalidade começa desabilitada.
+O Obsidian pode permanecer fechado. Knowledge começa habilitado, com vault local
+gerenciado quando nenhum é informado. Modelos externos exigem configuração.
+Veja [aprendizado contínuo](continuous-learning.md) para captura e grafo automáticos.
 Neste ciclo, o armazenamento privado exige permissões Unix (macOS/Linux); Windows
 recusa a abertura até existir validação equivalente de ACLs.
 
@@ -122,7 +124,7 @@ registrada na origem. Sem ela, a captura exige conclusão previamente registrada
 pelo Mercury. O leitor verifica identidade e estabilidade da transcrição antes
 e depois do modelo. Isso funciona sem ativar o Learn.
 
-Captura cria proposta privada. Aceite explícito publica em `Mercury/` no vault;
+Captura manual cria proposta privada. Aceite explícito publica em `Mercury/` no vault;
 repetição é idempotente. Relações explícitas de notas validadas do mesmo projeto, com os dois nomes presentes no aprendizado, podem acrescentar wikilinks na proposta (até oito); relações inferidas não são exportadas como aprovadas. Undo remove somente a nota gerada ainda intacta; edição
 humana produz conflito. O ledger conserva os bytes para auditoria/recuperação.
 Nenhuma nota humana fora do diretório gerenciado é substituída. Há uma corrida
@@ -172,3 +174,8 @@ Defaults de modelos podem mudar sem alterar o binário do CLI. Para uma avaliaç
 reproduzível, configure modelos explicitamente e registre os modelos reportados;
 use `index --graph --rebuild` após trocar defaults. Não há alegação de latência
 ou ganho de qualidade universal a partir do corpus sintético.
+
+Na automação, o mesmo writer publica notas com `status: proposed`, sem necessidade
+de aceite por sessão. O estado de publicação no ledger (`accepted`) não significa
+validação humana do conteúdo. Para validar uma nota, revise o conteúdo e altere
+seu frontmatter para `status: validated`; edição humana faz undo recusar conflito.

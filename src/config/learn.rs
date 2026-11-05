@@ -1,4 +1,4 @@
-//! Explicit, default-off configuration for automatic learning. Parsing is
+//! Default-on managed learning; external processing remains explicit. Parsing is
 //! intentionally strict because this section can authorize future writes.
 
 use std::{collections::BTreeMap, path::PathBuf};
@@ -9,6 +9,7 @@ use serde::{de, Deserialize, Deserializer};
 #[derive(Debug, Clone, PartialEq)]
 pub struct LearnConfig {
     pub enabled: bool,
+    pub allow_external: bool,
     pub review_every_turns: u32,
     pub weekly: bool,
     pub model: String,
@@ -53,7 +54,8 @@ impl From<LearnTargetKind> for TargetKind {
 impl Default for LearnConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
+            allow_external: false,
             review_every_turns: 12,
             weekly: true,
             model: "haiku".into(),
@@ -69,6 +71,7 @@ impl Default for LearnConfig {
 #[serde(default, deny_unknown_fields)]
 struct RawLearnConfig {
     enabled: bool,
+    allow_external: bool,
     review_every_turns: u32,
     weekly: bool,
     model: String,
@@ -84,6 +87,7 @@ impl Default for RawLearnConfig {
         let config = LearnConfig::default();
         Self {
             enabled: config.enabled,
+            allow_external: config.allow_external,
             review_every_turns: config.review_every_turns,
             weekly: config.weekly,
             model: config.model,
@@ -103,6 +107,7 @@ impl<'de> Deserialize<'de> for LearnConfig {
         let raw = RawLearnConfig::deserialize(deserializer)?;
         let config = Self {
             enabled: raw.enabled,
+            allow_external: raw.allow_external,
             review_every_turns: raw.review_every_turns,
             weekly: raw.weekly,
             model: raw.model,
@@ -136,8 +141,8 @@ impl LearnConfig {
         if !(1..=300).contains(&self.timeout_secs) {
             return Err("learn.timeout_secs must be 1..=300");
         }
-        if self.targets.len() > 16 || (self.enabled && self.targets.is_empty()) {
-            return Err("learn needs 1..=16 explicit targets when enabled");
+        if self.targets.len() > 16 {
+            return Err("learn accepts at most 16 explicit targets");
         }
         if self
             .targets
@@ -195,9 +200,10 @@ mod tests {
     }
 
     #[test]
-    fn default_is_off_without_targets() {
+    fn default_is_on_with_managed_scope_but_external_processing_off() {
         let config = parse("[learn]").unwrap();
-        assert!(!config.enabled);
+        assert!(config.enabled);
+        assert!(!config.allow_external);
         assert!(config.targets.is_empty());
         assert_eq!(config.review_every_turns, 12);
     }
@@ -221,7 +227,6 @@ mod tests {
     #[test]
     fn malformed_or_unsupported_target_fails_closed() {
         for text in [
-            "[learn]\nenabled = true",
             "[learn]\nreview_every_turns = 0",
             "[learn]\nmodel = '../escape'",
             "[learn]\nmax_budget_usd = 10",

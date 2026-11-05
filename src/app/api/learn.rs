@@ -31,7 +31,7 @@ impl App {
         params: LearnClaudeSessionEndParams,
         turn: bool,
     ) -> String {
-        if !self.learn_config.enabled {
+        if !self.learn_config.enabled && self.knowledge_automation.is_none() {
             return encode_error(id, "learn_disabled", "Learn is disabled");
         }
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
@@ -85,8 +85,17 @@ impl App {
                 "session originated from automation",
             );
         }
-        let Some(worker) = self.learn.as_ref() else {
-            return encode_error(id, "learn_unavailable", "Learn worker is unavailable");
+        let captured = !turn && self.capture_completed_session(&trigger);
+        let Some(worker) = self.learn.as_ref().filter(|_| self.learn_config.enabled) else {
+            return if captured {
+                encode_success(id, ResponseResult::Ok {})
+            } else {
+                encode_error(
+                    id,
+                    "learn_unavailable",
+                    "Learn worker is unavailable; check external processing configuration",
+                )
+            };
         };
         match worker.submit(trigger) {
             SubmitResult::Queued => encode_success(id, ResponseResult::Ok {}),
@@ -119,6 +128,7 @@ mod tests {
             rx,
             crate::api::EventHub::default(),
         );
+        app.learn_config.enabled = false;
         app.state.workspaces = vec![Workspace::test_new("learn")];
         app.state.ensure_test_terminals();
         let pane = app.state.workspaces[0].tabs[0].root_pane;
@@ -145,6 +155,52 @@ mod tests {
             },
         );
         (app, public_pane)
+    }
+
+    #[test]
+    fn knowledge_captures_only_current_completed_session_independently_of_learn() {
+        let (mut app, pane_id) = app_with_claude_session();
+        let (worker, receiver) =
+            crate::server::headless::knowledge::AutomationWorker::test_channel();
+        app.knowledge_automation = Some(worker);
+        let params = LearnClaudeSessionEndParams {
+            pane_id,
+            session_id: "session-1".into(),
+            transcript_path: "/tmp/session-1.jsonl".into(),
+        };
+        assert!(!app.learn_config.enabled);
+        app.handle_learn_claude_turn_end("turn".into(), params.clone());
+        assert!(receiver.try_recv().is_err());
+        let result = app.handle_learn_claude_session_end("end".into(), params.clone());
+        assert!(!result.contains("error"), "{result}");
+        assert_eq!(receiver.try_recv().unwrap().session_id, "session-1");
+        let mut forged = params;
+        forged.transcript_path = "/tmp/forged.jsonl".into();
+        assert!(app
+            .handle_learn_claude_session_end("forged".into(), forged)
+            .contains("stale_session"));
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn automated_sessions_never_feed_knowledge_capture() {
+        let (mut app, pane_id) = app_with_claude_session();
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let (worker, receiver) =
+            crate::server::headless::knowledge::AutomationWorker::test_channel();
+        app.knowledge_automation = Some(worker);
+        app.learn_excluded_sessions
+            .insert((pane, Provider::Claude), "session-1".into());
+        let result = app.handle_learn_claude_session_end(
+            "end".into(),
+            LearnClaudeSessionEndParams {
+                pane_id,
+                session_id: "session-1".into(),
+                transcript_path: "/tmp/session-1.jsonl".into(),
+            },
+        );
+        assert!(result.contains("learn_excluded_origin"));
+        assert!(receiver.try_recv().is_err());
     }
 
     #[test]

@@ -51,7 +51,7 @@ interface includes Portuguese labels. See <a href="assets/mercury/README.md">ass
 | **Guided scheduling** | Pick weekdays, daily/monthly schedules, intervals or a one-time run; advanced cron expressions remain available. |
 | **Agent routing** | Apply routing rules to Codex/Claude tasks and inspect the selection before submitting work. |
 | **Markdown memory + GraphRAG** | Index an Obsidian-compatible vault, retrieve source passages, and generate cited answers with opt-in model access. |
-| **History and Learn** | Find past conversations; optionally apply allowlisted improvements with backups, an audit trail and undo. |
+| **History and Learn** | Find past conversations; keep managed memory current, with backups, an audit trail and undo. |
 
 ## Quick start
 
@@ -121,6 +121,12 @@ and generated answers use your authenticated Codex/Claude CLIs only after explic
 configuration of external access. Responses carry source references; inferred
 relations remain distinct from reviewed decisions.
 
+With external processing configured, completed agent sessions are captured into
+proposed notes, indexed and included in GraphRAG automatically. A background
+monitor picks up vault edits; durable queues, retries and a daily call limit
+control automatic work. Explicit `enabled = false` settings remain respected.
+
+→ [Continuous learning and automation](docs/knowledge/continuous-learning.md)
 → [Knowledge and GraphRAG setup](docs/knowledge/README.md)
 
 ## Project status
@@ -136,8 +142,10 @@ An independent project under active development, based on
 
 Detach preserves running processes while the server remains alive. Server/machine
 restart can restore saved layout/session state; it does not preserve the original
-processes. Provider limits depend on what each account and CLI exposes. Learn is
-disabled by default. See the [validation report](docs/dev/usage-cron-009-review.md)
+processes. Provider limits depend on what each account and CLI exposes. Learn and
+Knowledge are enabled by default; external model processing requires explicit
+configuration. See [continuous learning](docs/knowledge/continuous-learning.md) and
+the [Usage/Cron validation report](docs/dev/usage-cron-009-review.md)
 for the tested scope and known limits.
 
 ## Documentation
@@ -154,6 +162,6 @@ for the tested scope and known limits.
 Mercury builds on herdr and the work of its contributors. Terminal rendering uses
 Ghostty components; vendored dependencies retain their notices and licenses.
 Mercury adds account usage, routing, guided scheduling, history, local knowledge
-and opt-in learning workflows to this foundation.
+and managed continuous-learning workflows to this foundation.
 
 [Apache License 2.0](LICENSE) · [Attribution and modifications](NOTICE)

@@ -39,6 +39,12 @@ fn status(options: &[String]) -> io::Result<i32> {
         return super::print_response(&response);
     }
     let changes = &status["changes"];
+    if let Some(runtime) = status["runtime"].as_object() {
+        println!(
+            "learn: enabled={} external_allowed={} worker_running={}",
+            runtime["enabled"], runtime["external_allowed"], runtime["worker_running"]
+        );
+    }
     let triggers = &status["triggers"];
     println!(
         "ledger: {}",

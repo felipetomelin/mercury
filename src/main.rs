@@ -69,6 +69,31 @@ const DEFAULT_CONFIG: &str = r##"# mercury configuration
 # Missing also shows onboarding; set false after you've chosen.
 # onboarding = true
 
+# Learn and Knowledge are enabled with a managed local scope by default.
+# External model processing requires explicit configuration.
+[learn]
+# enabled = true
+# allow_external = false
+# review_every_turns = 12
+# weekly = true
+# Without [[learn.target]], only Mercury's managed memory can be updated.
+
+[knowledge]
+# enabled = true
+# Without vault, Mercury uses a private vault in this session's data directory.
+# vault = "/absolute/path/to/obsidian-vault"
+# allow_external = false
+# allowed_providers = ["claude", "codex"]
+
+[knowledge.automation]
+# enabled = true
+# capture = true
+# publish = true  # Writes proposed notes, never human-validated decisions.
+# graph = true
+# poll_secs = 30
+# debounce_secs = 5
+# daily_model_calls = 64  # Conservative provider-attempt reservations.
+
 [theme]
 # Built-in themes: catppuccin, terminal, tokyo-night, dracula, nord,
 #                  gruvbox, one-dark, solarized, kanagawa, rose-pine,

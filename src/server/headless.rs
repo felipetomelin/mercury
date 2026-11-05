@@ -76,7 +76,7 @@ mod bootstrap;
 mod client_views;
 mod endpoint_requests;
 mod history;
-mod knowledge;
+pub(crate) mod knowledge;
 mod learn;
 mod lifecycle;
 mod native_graphics;
@@ -2998,7 +2998,16 @@ impl HeadlessServer {
                 | api::schema::Method::LearnUndo(_)
                 | api::schema::Method::LearnUndoDate(_)
         ) {
-            learn::dispatch(msg.request, msg.respond_to, self.app.event_tx.clone());
+            learn::dispatch(
+                msg.request,
+                msg.respond_to,
+                self.app.event_tx.clone(),
+                crate::api::schema::LearnRuntimeInfo {
+                    enabled: self.app.learn_config.enabled,
+                    external_allowed: self.app.learn_config.allow_external,
+                    worker_running: self.app.learn.is_some(),
+                },
+            );
             return changed;
         }
         if matches!(
