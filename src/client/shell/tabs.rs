@@ -1,6 +1,13 @@
 use super::*;
 
 const TAB_SCROLL_BUTTON_WIDTH: u16 = 3;
+/// Clickable "usage" chip at the right of the tab bar (D6 in
+/// `docs/dev/usage-ui-design.md`); toggles `ClientShellView::Usage`.
+const USAGE_CHIP_TEXT: &str = " usage ";
+const CRONS_CHIP_TEXT: &str = " crons ";
+const HISTORY_CHIP_TEXT: &str = " history ";
+const LEARN_CHIP_TEXT: &str = " learn ";
+const KNOWLEDGE_CHIP_TEXT: &str = " knowledge ";
 const MIN_TAB_STRIP_WIDTH: u16 =
     MIN_TAB_WIDTH + NEW_TAB_WIDTH + TAB_SCROLL_BUTTON_WIDTH.saturating_mul(2);
 
@@ -12,6 +19,7 @@ pub(crate) fn render_tab_bar(
     tab_scroll: &mut usize,
     reveal_focused_tab: &mut bool,
     tab_drag_insert_index: Option<usize>,
+    view: ClientShellView,
     hits: &mut ShellHitMap,
 ) {
     let palette = &config.palette;
@@ -220,7 +228,7 @@ pub(crate) fn render_tab_bar(
             );
         }
     }
-    render_tab_bar_status(buffer, area, snapshot, palette);
+    render_tab_bar_status(buffer, area, snapshot, view, palette, hits);
 }
 
 pub(crate) fn tab_bar_status_width(snapshot: &ClientShellSnapshot) -> u16 {
@@ -234,11 +242,47 @@ pub(crate) fn tab_bar_status_width(snapshot: &ClientShellSnapshot) -> u16 {
     )
 }
 
-fn tab_bar_status_area(snapshot: &ClientShellSnapshot, area: Rect) -> Option<Rect> {
-    let width = tab_bar_status_width(snapshot);
-    if width == 0 {
-        return None;
+fn knowledge_chip_text(snapshot: &ClientShellSnapshot, area: Rect) -> &'static str {
+    let base = tab_bar_status_width(snapshot)
+        + u16::from(!snapshot.tab_bar_right.is_empty())
+        + display_width(USAGE_CHIP_TEXT)
+        + display_width(CRONS_CHIP_TEXT)
+        + display_width(HISTORY_CHIP_TEXT)
+        + display_width(LEARN_CHIP_TEXT);
+    if area
+        .width
+        .saturating_sub(base + display_width(KNOWLEDGE_CHIP_TEXT) + 1)
+        >= MIN_TAB_STRIP_WIDTH
+    {
+        KNOWLEDGE_CHIP_TEXT
+    } else {
+        " kg "
     }
+}
+fn show_status_segments(snapshot: &ClientShellSnapshot, area: Rect) -> bool {
+    let chips = display_width(USAGE_CHIP_TEXT)
+        + display_width(CRONS_CHIP_TEXT)
+        + display_width(HISTORY_CHIP_TEXT)
+        + display_width(LEARN_CHIP_TEXT)
+        + display_width(knowledge_chip_text(snapshot, area));
+    area.width.saturating_sub(
+        chips + tab_bar_status_width(snapshot) + u16::from(!snapshot.tab_bar_right.is_empty()) + 1,
+    ) >= MIN_TAB_STRIP_WIDTH
+}
+fn tab_bar_status_area(snapshot: &ClientShellSnapshot, area: Rect) -> Option<Rect> {
+    let segments_width = if show_status_segments(snapshot, area) {
+        tab_bar_status_width(snapshot)
+    } else {
+        0
+    };
+    let gap = if segments_width > 0 { 1 } else { 0 };
+    let width = segments_width
+        .saturating_add(gap)
+        .saturating_add(display_width(USAGE_CHIP_TEXT))
+        .saturating_add(display_width(CRONS_CHIP_TEXT))
+        .saturating_add(display_width(HISTORY_CHIP_TEXT))
+        .saturating_add(display_width(LEARN_CHIP_TEXT))
+        .saturating_add(display_width(knowledge_chip_text(snapshot, area)));
     let reserved = width.saturating_add(1);
     (area.width.saturating_sub(reserved) >= MIN_TAB_STRIP_WIDTH)
         .then(|| Rect::new(area.right().saturating_sub(width), area.y, width, 1))
@@ -258,14 +302,26 @@ fn render_tab_bar_status(
     buffer: &mut Buffer,
     area: Rect,
     snapshot: &ClientShellSnapshot,
+    view: ClientShellView,
     palette: &Palette,
+    hits: &mut ShellHitMap,
 ) {
+    hits.usage_chip = Rect::default();
+    hits.crons_chip = Rect::default();
+    hits.history_chip = Rect::default();
+    hits.learn_chip = Rect::default();
+    hits.knowledge_chip = Rect::default();
     let Some(status) = tab_bar_status_area(snapshot, area) else {
         return;
     };
     let separator_width = display_width(&snapshot.tab_bar_right_separator);
     let mut x = status.x;
-    for (index, segment) in snapshot.tab_bar_right.iter().enumerate() {
+    for (index, segment) in snapshot
+        .tab_bar_right
+        .iter()
+        .filter(|_| show_status_segments(snapshot, area))
+        .enumerate()
+    {
         if index > 0 && separator_width > 0 {
             put_text(
                 buffer,
@@ -289,6 +345,112 @@ fn render_tab_bar_status(
         put_text(buffer, x, area.y, width, &segment.text, style);
         x = x.saturating_add(width);
     }
+    if !snapshot.tab_bar_right.is_empty() && show_status_segments(snapshot, area) {
+        x = x.saturating_add(1);
+    }
+    let chip_width = display_width(USAGE_CHIP_TEXT).min(status.right().saturating_sub(x));
+    let chip_rect = Rect::new(x, area.y, chip_width, 1);
+    let active = view == ClientShellView::Usage;
+    let chip_style = if active {
+        Style::default()
+            .fg(panel_contrast_fg(palette))
+            .bg(palette.accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(palette.overlay1).bg(palette.surface0)
+    };
+    put_text(
+        buffer,
+        chip_rect.x,
+        chip_rect.y,
+        chip_rect.width,
+        USAGE_CHIP_TEXT,
+        chip_style,
+    );
+    hits.usage_chip = chip_rect;
+    x = x.saturating_add(chip_width);
+    let cron_width = display_width(CRONS_CHIP_TEXT).min(status.right().saturating_sub(x));
+    let cron_rect = Rect::new(x, area.y, cron_width, 1);
+    let cron_style = if view == ClientShellView::Crons {
+        Style::default()
+            .fg(panel_contrast_fg(palette))
+            .bg(palette.accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(palette.overlay1).bg(palette.surface0)
+    };
+    put_text(
+        buffer,
+        cron_rect.x,
+        cron_rect.y,
+        cron_rect.width,
+        CRONS_CHIP_TEXT,
+        cron_style,
+    );
+    hits.crons_chip = cron_rect;
+    x = x.saturating_add(cron_width);
+    let history_width = display_width(HISTORY_CHIP_TEXT).min(status.right().saturating_sub(x));
+    let history_rect = Rect::new(x, area.y, history_width, 1);
+    let history_style = if view == ClientShellView::History {
+        Style::default()
+            .fg(panel_contrast_fg(palette))
+            .bg(palette.accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(palette.overlay1).bg(palette.surface0)
+    };
+    put_text(
+        buffer,
+        history_rect.x,
+        history_rect.y,
+        history_rect.width,
+        HISTORY_CHIP_TEXT,
+        history_style,
+    );
+    hits.history_chip = history_rect;
+    x = x.saturating_add(history_width);
+    let learn_width = display_width(LEARN_CHIP_TEXT).min(status.right().saturating_sub(x));
+    let learn_rect = Rect::new(x, area.y, learn_width, 1);
+    let learn_style = if view == ClientShellView::Learn {
+        Style::default()
+            .fg(panel_contrast_fg(palette))
+            .bg(palette.accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(palette.overlay1).bg(palette.surface0)
+    };
+    put_text(
+        buffer,
+        learn_rect.x,
+        learn_rect.y,
+        learn_rect.width,
+        LEARN_CHIP_TEXT,
+        learn_style,
+    );
+    hits.learn_chip = learn_rect;
+    x = x.saturating_add(learn_width);
+    let rect = Rect::new(
+        x,
+        area.y,
+        display_width(knowledge_chip_text(snapshot, area)).min(status.right().saturating_sub(x)),
+        1,
+    );
+    let style = if view == ClientShellView::Knowledge {
+        Style::default()
+            .fg(panel_contrast_fg(palette))
+            .bg(palette.accent)
+    } else {
+        Style::default().fg(palette.overlay1).bg(palette.surface0)
+    };
+    put_text(
+        buffer,
+        rect.x,
+        rect.y,
+        rect.width,
+        knowledge_chip_text(snapshot, area),
+        style,
+    );
+    hits.knowledge_chip = rect;
 }
 
 fn tab_drop_indicator_x(

@@ -1,6 +1,6 @@
 ---
 name: mercury-mechanic
-description: Cheap worker for mechanical Mercury tasks — renames/rebrand (herdr → mercury), moving files, boilerplate, config/doc edits, fixture generation, running builds/tests and fixing trivial compile errors (imports, typos, simple type mismatches).
+description: Cheap worker for mechanical Mercury tasks — renames/rebrand, moving files, boilerplate, config/doc edits, fixture generation, running builds/tests and fixing trivial compile errors (imports, typos, simple type mismatches).
 model: claude-sonnet-5
 ---
 

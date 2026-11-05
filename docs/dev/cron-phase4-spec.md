@@ -1,0 +1,84 @@
+# Fase 4 — Crons
+
+Status: revisão de escopo em 2026-10-06: email/SMTP excluído pelo usuário; Teams deve aceitar respostas e execução de tarefas, não apenas saída. O usuário escolheu **Workflows/Power Automate** e autorizaria somente a própria identidade Microsoft Entra, não bot próprio nem outros usuários; porém pediu para deixar notificações e interação Teams no backlog por enquanto. O fluxo abaixo é design preliminar, não autorização para implementá-lo agora. Pesquisa anterior: `docs/dev/cron-phase4-research.md`.
+
+## Problema
+
+Mercury controla agentes e panes persistentes. O usuário precisa programar tarefas headless, prompts em panes ou scripts, observar execuções após restart e interagir com os resultados localmente, em pane ou no Teams. Nenhum email deve ser enviado.
+
+## Solução
+
+- Criar crate `mercury-cron` para tipos, parsing de agenda, cálculo de `next_run_at`, validação de jobs e política de retry/catch-up. Sem dependência da UI ou da API Mercury.
+- O servidor é o único escritor dos jobs. CLI (`mercury cron add/list/edit/pause/run/rm/runs/doctor`) e aba Crons usam novos métodos `cron.*` da API local. `add` aceita flags simples ou `--file <job.toml>`; `edit` aceita arquivo completo para evitar mutações parciais ambíguas.
+- Storage: jobs em `~/.local/share/mercury/cron/jobs.toml` com escrita temporária, `fsync` e rename; execuções/incidents em SQLite WAL. Um único scheduler proprietário por diretório de dados; lock impede disparos duplicados por servidores simultâneos.
+- Agenda por job: one-shot relativo (`30m`), intervalo (`every 2h`), cron de cinco campos (`0 9 * * *`) ou timestamp RFC3339. Cron e intervalo usam offset UTC fixo por job (default do relógio local no momento da criação, persistido); não dependem de nomes IANA.
+- Antes de despachar uma ocorrência, persistir o próximo horário e reservar a ocorrência no ledger. Uma ocorrência é despachada no máximo uma vez; crash pode deixar ocorrência reservada sem execução, visível como interrompida/indeterminada. `catch_up = skip | run_once` controla jobs atrasados após restart.
+- Alvos mutuamente exclusivos: `headless` (`claude -p` ou `codex exec --json` com prompt e workdir), `pane` (método `agent.prompt` em pane existente), `script` (executável e argumentos explícitos, nunca prompt interpretado por shell). Timeout, repeat, modelo/effort/skills, workdir e entrega são campos declarativos. Uma execução usa sessão nova no modo headless.
+- Para `headless`, o log e as entregas contêm a resposta final em texto, não o envelope JSON de Claude nem eventos/telemetria JSONL do Codex. Claude usa o campo `result`; Codex usa a última mensagem `agent_message` concluída após `turn.completed`. Falha do processo, `is_error`, `turn.failed`, resposta ausente ou envelope inválido geram run falho sem persistir stdout/stderr bruto; a leitura segue limitada mesmo com eventos intermediários extensos. Scripts mantêm saída textual própria.
+- Codex headless conserva a proteção padrão do CLI: o workdir precisa estar dentro de um repositório Git; Mercury não adiciona `--skip-git-repo-check` implicitamente. `cron doctor` aponta workdir Codex fora de Git e o executor falha com diagnóstico estável antes de iniciar o processo. A criação do job continua declarativa, sem executar o alvo.
+- Entregas podem ser combinadas: log local sempre; notificação local opcional; pane existente; Teams. O Teams também deve receber respostas/comandos autenticados via Workflows/Power Automate para executar tarefas explicitamente autorizadas e devolver o resultado à conversa correspondente; webhook somente de saída é insuficiente. Respostas em thread de canal não disparam o gatilho "When a new channel message is added"; o fluxo preferido para responder a um run é um Adaptive Card com "wait for a response", que fornece a identidade do respondente. O Flow então encaminha a ação ao Mercury por HTTPS autenticado, recebe um ID de operação e acompanha seu estado antes de publicar o resultado no Teams. A publicação HTTPS/gateway e a allowlist de identidades dependem do esclarecimento de infraestrutura; a entrada fica desabilitada por padrão. Config guarda somente referências a segredos, não valores. Corpo e saída têm limite de tamanho; `[SILENT]` omite entregas externas, `[CRON_FAILURE]` marca falha. Email/SMTP não é destino suportado no escopo final.
+- Falhas acumulam `failure_streak`; incidents são agrupados por job+causa, com alerta inicial e lembrete após 6 h até `ack`. `cron doctor` valida agendas, binários, workdirs, destino e variáveis de ambiente sem executar o job. Retry automático é permitido apenas para falha de rede comprovada antes de chamar o modelo, com limite explícito.
+- Aba Crons mostra lista com próximo horário/último status, detalhe de runs/logs e ações run now, pause e edit. Skill do Mercury orienta criação por linguagem natural via CLI/API, sem ação implícita do daemon.
+- UI Crons usa o fluxo assíncrono de métodos por endpoint já usado pela shell: chip na barra de abas e `prefix+shift+c` (`prefix+c` já cria aba); `cron.list` ao abrir/atualizar, clique/Enter para detalhe do job com definição e histórico (`cron.get` + `cron.runs`), clique/Enter numa execução para `cron.log`, `n` para run now e `p` para pause/resume. Logs e definição não entram em `ClientShellSnapshot`; respostas ficam só no estado transitório do cliente. Edição da agenda consulta a definição completa via API antes de enviar `cron.edit`, preservando campos não alterados. O detalhe mostra agenda, alvo, parâmetros declarativos, workdir, estado, próxima execução e histórico com status/horários/erro; prompt pode ser mostrado localmente no detalhe, mas nunca em snapshot ou log de diagnóstico. Falhas de carregamento aparecem na aba e não são silenciosas.
+- A tecla `a` abre um assistente de criação na aba: nome, agenda, alvo (`claude`, `codex`, `pane` ou `script`), identificador do pane/executável quando aplicável, prompt para agente e workdir (prefill do workspace atual). Cada campo obrigatório é validado antes de avançar; Esc cancela sem mutação. O job só é enviado por `cron.add` ao final, com entrega local padrão. O assistente cobre os três tipos de alvo; opções avançadas (argumentos de script, modelo, effort, skills, repeat e destinos externos) permanecem disponíveis pelo TOML/CLI. Nenhum prompt é posto em argv ou snapshot.
+
+## Fora de escopo
+
+Sem scheduler em nuvem, cron de seis campos, fuso IANA, shell implícito, envio de email, garantia exatamente-uma-vez para efeitos externos, nem auto-review disparado por cron. O CLI não pode expor secrets em JSON, logs ou flags de linha de comando.
+
+## Critérios de aceite
+
+1. Dado job válido agendado, quando o servidor alcança `next_run_at`, então a ocorrência é reservada e o próximo horário é persistido antes do dispatch.
+2. Dado restart depois da reserva, então a mesma ocorrência não é disparada outra vez; jobs futuros continuam agendados e o histórico de runs permanece acessível.
+3. Dado job `headless`, `pane` ou `script`, quando `run now` é chamado, então o alvo correto recebe a tarefa com timeout e workdir válidos; erros aparecem no run e no incident, sem travar a TUI.
+4. Dado `repeat.times`, quando o número de execuções completadas chega ao limite, então o job desabilita. Dado `catch_up = skip | run_once`, o comportamento após restart é determinístico e testado.
+5. Dado `[SILENT]`, então não há entrega externa; dado `[CRON_FAILURE]`, então run é falho. Um incidente recorrente não cria alerta a cada tick.
+6. Dado um destino local/pane opt-in, quando a entrega é feita, então o resultado aparece no log e cada destino é tentado isoladamente; falha em um não apaga o run nem impede os demais. Nenhum caminho envia email.
+7. `mercury cron add/list/edit/pause/run/rm/runs/doctor` e aba Crons mostram o mesmo estado persistido; o job sobrevive a restart. API schema/contrato e help da CLI são atualizados.
+8. Nenhum secret é persistido em `jobs.toml`, SQLite, snapshots ou logs; transports e processos são simulados nos testes sem chamadas reais de rede.
+9. Dado output estruturado válido de Claude ou Codex, quando um run headless termina, então somente a mensagem final é entregue e registrada; dado envelope malformado/falho ou stream intermediário extenso, então o run não vaza metadados ou stderr bruto e a captura continua limitada.
+10. Dado a aba Crons aberta, quando o usuário completa o assistente de criação para `headless`, `pane` ou `script`, então a UI envia `cron.add` ao endpoint ativo e recarrega a lista após sucesso; cancelar ou deixar um campo obrigatório inválido não cria job.
+11. Dado job Codex headless com workdir fora de Git, quando `cron doctor` ou `run now` é chamado, então há diagnóstico específico sem executar Codex nem persistir stderr bruto; em repositório Git, o run real registra somente a resposta final.
+12. Dado um job na aba Crons, quando o usuário clica ou pressiona Enter, então vê a definição do que será executado e as últimas 50 execuções; ao escolher uma execução vê seu log e Esc retorna ao detalhe. Respostas atrasadas de outro job não podem substituir esse detalhe.
+13. Dado `cron.add` confirmado, quando a atualização subsequente não contém o ID retornado, então a aba mostra erro persistente de divergência em vez de apagar silenciosamente o job da tela; erro de envio ou persistência também aparece na aba.
+14. Dadas consultas `cron.list` simultâneas, quando a resposta de uma consulta anterior chega depois da mais recente, então a aba ignora a resposta antiga e preserva a lista confirmada pelo servidor; fechar e reabrir a aba não reutiliza respostas da abertura anterior.
+
+Backlog Teams, **fora dos critérios de aceite desta fase**: dada uma resposta/comando no Teams de identidade autorizada, Mercury deverá validar a identidade e a ação, executar a tarefa permitida no contexto esperado uma única vez e responder no Teams. Identidade, comando ou callback inválido não poderão executar nada. Notificações, receptor Workflows/Power Automate, exposição HTTPS autenticada e smoke real ficam pendentes até a infraestrutura ser definida e o usuário retomar esse escopo. O webhook de saída existente não satisfaz esse requisito futuro.
+
+## Trade-offs
+
+- At-most-once por ocorrência é escolhido em vez de replay automático após crash para evitar efeitos externos duplicados. O ledger explicita execuções indeterminadas.
+- Offset fixo simplifica persistência e testes, mas não acompanha DST. Uma migração futura pode adicionar timezone IANA sem reinterpretar jobs existentes.
+- `jobs.toml` é legível/editável, mas só o servidor escreve. SQLite fica restrito ao ledger de runs/incidents; seus schemas são versionados.
+- Para Teams, usar transporte HTTPS testável com validação de identidade de entrada, deduplicação e limites; não substituir por execução de shell ou payload contendo segredo. SMTP foi removido do escopo.
+
+## Dependências
+
+- `rusqlite`/SQLite embutido já obtido e compilado no workspace; executor assíncrono usa Tokio já presente no binário.
+- Binários Claude/Codex presentes para execuções reais; Teams configurado por referências a segredos, nunca valores persistidos. Nenhuma credencial real é necessária para testes isolados.
+- O transporte atual de saída HTTPS usa `reqwest` com TLS e timeout. O antigo SMTP/`lettre` foi retirado; destinos antigos `email` são descartados ao carregar jobs e removidos na próxima gravação. Para entrada, o usuário escolheu Workflows/Power Automate. A [documentação do conector Teams](https://learn.microsoft.com/en-us/connectors/teams/) informa que o gatilho de mensagem nova em canal não inclui respostas em thread; [Adaptive Cards com espera de resposta](https://learn.microsoft.com/en-us/power-automate/overview-adaptive-cards) oferecem uma ação interativa com identidade do respondente, mas aceitam apenas uma submissão por cartão. A [orientação de segurança dos flows](https://learn.microsoft.com/en-us/power-automate/guidance/coding-guidelines/use-secure-inputs-outputs-triggers) exige proteger entradas/saídas e não embutir segredos; a [referência de erros](https://learn.microsoft.com/power-automate/error-reference) alerta sobre timeout padrão de ação HTTP longa. Por isso o contrato de operação deve ser assíncrono, com deduplicação e consulta de status; a ação HTTP pode exigir [licenciamento Premium](https://learn.microsoft.com/en-us/power-platform/admin/power-automate-licensing/types). Confirmar tenant, gateway e exposição HTTPS antes da integração real.
+- API/socket, `AppEvent`, scheduler headless, CLI, shell snapshot e Skill existentes no repo.
+
+## Tarefas e plano técnico
+
+1. Criar `mercury-cron`: gramática/validação de agendas, avanço após ocorrência, modelos de job/run/incident, testes de fronteiras e restart.
+2. Implementar storage atômico e ledger SQLite com migração/schema/versionamento; testes de crash/reserva, concorrência e catch-up.
+3. Integrar scheduler ao loop headless, com dispatch off-thread e `AppEvent`; abstrair executor/delivery para testes e implementar três alvos.
+4. Implementar destinos, incident handling e `doctor`, sem secrets em outputs.
+5. Adicionar API `cron.*`, CLI, schema e skill. Testar contratos e roundtrip de persistência.
+6. Adicionar aba Crons sobre o chrome existente, com lista/detalhe/ações; testar input/render/snapshot.
+   - Assistente de criação em etapas reutiliza o overlay textual da shell e constrói a definição somente no envio final; testar cada alvo, cancelamento, validação e resposta da API.
+   - Refinamento 2026-10-08: reutilizar `cron.get` e `cron.runs` no detalhe transitório, sem alterar API/storage; guardar ID confirmado de `cron.add` até `cron.list` confirmar presença e expor divergência na UI. Testar clique/teclado, respostas atrasadas, render e confirmação de criação. Análise: ambos os métodos já existem, portanto não há migração nem novo contrato; a fonte de verdade permanece o servidor.
+   - Correção de concorrência 2026-10-08: identificar a última requisição `cron.list` do cliente e ignorar respostas anteriores, inclusive erros, antes de alterarem o estado transitório. O ID de requisição já é único na shell; não há mudança de API nem de storage. Testar reordenação depois de `cron.add` e entre aberturas da aba.
+7. Revisão consolidada, testes unitários/integrados, inspeção manual TUI e gate de segurança antes de commit.
+
+## Análise de consistência
+
+- O fluxo `AppEvent` e `handle_scheduled_tasks_headless` suporta resultado assíncrono; `next_headless_loop_deadline_with_git_refresh` precisa incluir o próximo cron para não depender de polling fixo.
+- API e CLI existentes são a camada certa de mutação, preservando servidor como escritor único. Novos campos do snapshot devem ser opcionais com `#[serde(default)]`; o schema da API precisa ser regenerado.
+- A shell tem `push_endpoint_method_with_kind` e `handle_endpoint_result` para respostas assíncronas; a aba pode manter estado transitório tipado, sem novos campos no snapshot. O método `cron.list` precisa incluir último status para a lista, e `cron.get` precisa devolver definição declarativa para edição sem perder campos.
+- O editor de texto do overlay é intencionalmente de linha única; por isso a criação básica deve ser um assistente de campos curtos, não um TOML multiline. Os prompts longos e as opções avançadas usam `cron add --file`. O caminho de trabalho predefinido vem de `new_workspace_cwd` do workspace focado e continua editável antes do envio.
+- SQLite está disponível e o primeiro grupo já provou reserva, migração e execução local. A documentação primária de Teams Workflows, `reqwest` e `lettre` foi consultada para o contrato de transporte; dependências estão no `Cargo.lock`. Os transportes têm testes locais simulados, mas envio com credenciais reais ainda depende de smoke test autorizado. Não substituir por `curl` com URL ou credenciais em argv.
+- A documentação oficial [Claude Code headless](https://code.claude.com/docs/en/headless) identifica `result` no envelope JSON; a [documentação oficial do Codex não interativo](https://learn.chatgpt.com/docs/non-interactive-mode) mostra `item.completed`/`agent_message` e `turn.completed` em JSONL. O parser é por provedor, preserva apenas resposta final limitada e ignora eventos de ferramenta/telemetria.
+- O requisito Teams bidirecional não pode ser considerado concluído por mocks ou webhook de saída apenas; requer contrato de entrada autenticado, teste local simulado e smoke autorizado quando houver infraestrutura. Email/SMTP não integra mais o requisito.
+- Smoke real em sessão Mercury isolada comprovou `codex exec --json`: num workdir Git temporário, run e log foram `success`/`MERCURY_CRON_SMOKE_OK`; em diretório temporário sem Git, o CLI saiu não-zero. A [documentação oficial do Codex](https://learn.chatgpt.com/docs/non-interactive-mode) descreve o requisito Git e o escape `--skip-git-repo-check`; por segurança, o escape não é automático em jobs Mercury.

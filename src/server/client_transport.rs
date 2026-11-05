@@ -795,7 +795,7 @@ pub(crate) fn handle_client_handshake(
                 version: PROTOCOL_VERSION,
                 encoding: RenderEncoding::SemanticFrame,
                 error: Some(
-                    "this client predates the stable endpoint protocol; upgrade the Herdr client"
+                    "this client predates the stable endpoint protocol; upgrade the Mercury client"
                         .to_owned(),
                 ),
             };
@@ -1447,7 +1447,7 @@ mod tests {
         }
         #[cfg(windows)]
         {
-            std::env::temp_dir().join(format!("herdr-{name}-{filename}"))
+            std::env::temp_dir().join(format!("mercury-{name}-{filename}"))
         }
     }
 

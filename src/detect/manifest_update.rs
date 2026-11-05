@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use super::{agent_label, parse_agent_label, Agent};
 
 pub(crate) const MANIFEST_ENGINE_VERSION: u32 = 3;
-const DEFAULT_CATALOG_URL: &str = "https://herdr.dev/agent-detection/index.toml";
-const CATALOG_URL_ENV: &str = "HERDR_AGENT_DETECTION_MANIFEST_CATALOG_URL";
+const DEFAULT_CATALOG_URL: &str = "https://mercury.dev/agent-detection/index.toml";
+const CATALOG_URL_ENV: &str = "MERCURY_AGENT_DETECTION_MANIFEST_CATALOG_URL";
 const MAX_FETCH_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone)]
@@ -233,7 +233,18 @@ pub(crate) struct ManifestUpdateOutput {
 }
 
 pub(crate) fn check_and_update() -> Result<ManifestUpdateOutput, String> {
-    check_and_update_from_url(&catalog_url())
+    // Mercury has no hosted agent-detection catalog yet (fork of Mercury
+    // v0.9.3, no public distribution infra). Only run when a test/override
+    // explicitly points CATALOG_URL_ENV elsewhere; otherwise this is a no-op
+    // rather than a fetch against a fabricated or upstream-Mercury domain.
+    if std::env::var(CATALOG_URL_ENV)
+        .ok()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return check_and_update_from_url(&catalog_url());
+    }
+    Err("agent-detection catalog sync is disabled: Mercury has no hosted catalog yet".to_string())
 }
 
 fn check_and_update_from_url(url: &str) -> Result<ManifestUpdateOutput, String> {
@@ -612,7 +623,7 @@ contains = ["{contains}"]
         let old_config = std::env::var_os("XDG_CONFIG_HOME");
         let old_state = std::env::var_os("XDG_STATE_HOME");
         let dir = std::env::temp_dir().join(format!(
-            "herdr-manifest-update-{name}-{}",
+            "mercury-manifest-update-{name}-{}",
             std::process::id()
         ));
         let config_dir = dir.join("config");
@@ -677,8 +688,10 @@ contains = ["{contains}"]
     fn auto_update_reloads_manifest_cache_after_remote_commit() {
         with_state_dir("auto-update-reloads-cache", || {
             let old_catalog_url = std::env::var_os(CATALOG_URL_ENV);
-            let web_dir = std::env::temp_dir()
-                .join(format!("herdr-manifest-update-web-{}", std::process::id()));
+            let web_dir = std::env::temp_dir().join(format!(
+                "mercury-manifest-update-web-{}",
+                std::process::id()
+            ));
             let _ = fs::remove_dir_all(&web_dir);
             fs::create_dir_all(&web_dir).unwrap();
             fs::write(
@@ -748,7 +761,7 @@ path = "codex.toml"
 
             let old_catalog_url = std::env::var_os(CATALOG_URL_ENV);
             let web_dir = std::env::temp_dir().join(format!(
-                "herdr-manifest-update-current-web-{}",
+                "mercury-manifest-update-current-web-{}",
                 std::process::id()
             ));
             let _ = fs::remove_dir_all(&web_dir);
@@ -817,7 +830,7 @@ path = "codex.toml"
 
             let old_catalog_url = std::env::var_os(CATALOG_URL_ENV);
             let web_dir = std::env::temp_dir().join(format!(
-                "herdr-manifest-update-partial-web-{}",
+                "mercury-manifest-update-partial-web-{}",
                 std::process::id()
             ));
             let _ = fs::remove_dir_all(&web_dir);

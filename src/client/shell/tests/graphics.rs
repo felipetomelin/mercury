@@ -138,7 +138,7 @@ fn assert_graphics_cover(state: &mut ClientShellState, covered: Rect, cols: u16,
 
 #[test]
 fn notifications_and_clipboard_feedback_only_cover_their_drawn_corners() {
-    use crate::config::{ToastClipboardPosition as Clipboard, ToastHerdrPosition as Toast};
+    use crate::config::{ToastClipboardPosition as Clipboard, ToastMercuryPosition as Toast};
     for (cols, rows) in [(106, 40), (40, 24)] {
         for position in [
             Toast::TopLeft,
@@ -311,6 +311,10 @@ fn every_dialog_and_menu_occludes_its_panel_not_the_whole_screen() {
         ClientShellOverlay::Settings(ClientSettingsOverlay {
             section: ClientSettingsSection::Theme,
             selected: 0,
+            theme_names: crate::config::THEME_NAMES
+                .iter()
+                .map(|name| (*name).into())
+                .collect(),
             original_theme_name: String::new(),
             original_palette: palette,
             integrations: Vec::new(),

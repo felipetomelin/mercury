@@ -229,7 +229,7 @@ mod tests {
             config_diagnostic: None,
             product_announcement: None,
             update_available: None,
-            update_install_command: "herdr update".into(),
+            update_install_command: "mercury update".into(),
             server_keybindings_toml: None,
             latest_release_notes_available: false,
             integration_updates_available: false,
@@ -247,6 +247,7 @@ mod tests {
             panes: Vec::new(),
             agents: Vec::new(),
             commands: Vec::new(),
+            usage: None,
         }
     }
 
@@ -334,6 +335,26 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_json_defaults_missing_usage_field_for_older_servers() {
+        // Pre-usage servers (and recordings/fixtures from before Fase 2) never send
+        // `usage`; `#[serde(default)]` must keep those snapshots decodable.
+        let mut snapshot = match snapshot_message(&snapshot()).unwrap() {
+            ServerMessage::EndpointControl { data, .. } => {
+                serde_json::from_str::<serde_json::Value>(&data).unwrap()
+            }
+            _ => unreachable!(),
+        };
+        snapshot
+            .as_object_mut()
+            .unwrap()
+            .remove("usage")
+            .expect("snapshot() should include a usage field to strip");
+
+        let decoded: ClientShellSnapshot = serde_json::from_value(snapshot).unwrap();
+        assert_eq!(decoded.usage, None);
+    }
+
+    #[test]
     fn snapshot_json_tolerates_future_fields_and_command_actions() {
         let mut snapshot = match snapshot_message(&snapshot()).unwrap() {
             ServerMessage::EndpointControl { data, .. } => {
@@ -349,12 +370,89 @@ mod tests {
             "action": "FutureAction",
             "description": null
         }]);
+        // Pre-usage agent row (no `usage` key at all) alongside a usage-bearing one.
+        snapshot["agents"] = serde_json::json!([
+            {
+                "pane_id": "pane_1",
+                "workspace_id": "ws_1",
+                "tab_id": "tab_1",
+                "name": null,
+                "display_agent": null,
+                "agent": null,
+                "title": null,
+                "terminal_title": null,
+                "terminal_title_stripped": null,
+                "agent_status": "idle",
+                "state_change_seq": 0,
+                "state_labels": [],
+                "tokens": [],
+                "focused": false
+            },
+            {
+                "pane_id": "pane_2",
+                "workspace_id": "ws_1",
+                "tab_id": "tab_1",
+                "name": null,
+                "display_agent": null,
+                "agent": "claude",
+                "title": null,
+                "terminal_title": null,
+                "terminal_title_stripped": null,
+                "agent_status": "working",
+                "state_change_seq": 0,
+                "state_labels": [],
+                "tokens": [],
+                "focused": false,
+                "usage": {
+                    "model": "claude-sonnet-5",
+                    "context_permille": 430,
+                    "context_exact": true,
+                    "context_window": 200000,
+                    "tokens_in": 1200,
+                    "tokens_out": 22000,
+                    "tokens_cache_read": 0,
+                    "tokens_cache_write": 0,
+                    "cost_micros_usd": 3410000,
+                    "updated_at_unix_ms": 1791210482000i64
+                }
+            }
+        ]);
+        snapshot["usage"] = serde_json::json!({
+            "providers": [],
+            "budgets": [{
+                "name": "future-budget",
+                "scope": "global",
+                "level": "future_level",
+                "used_permille": 500,
+                "used_scaled": 1,
+                "limit_scaled": 2,
+                "unit": "future_unit",
+                "warn_threshold": null,
+                "resets_at_unix_ms": null,
+                "forecast_exhausted_at_unix_ms": null,
+                "partial": false
+            }]
+        });
 
         let decoded: ClientShellSnapshot = serde_json::from_value(snapshot).unwrap();
         assert_eq!(
             decoded.commands[0].action,
             crate::protocol::ClientShellCommandAction::Unknown
         );
+        assert_eq!(decoded.agents[0].usage, None);
+        assert_eq!(
+            decoded.agents[1]
+                .usage
+                .as_ref()
+                .and_then(|usage| usage.context_permille),
+            Some(430)
+        );
+        let budget = &decoded.usage.unwrap().budgets[0];
+        assert_eq!(
+            budget.level,
+            crate::protocol::ClientShellBudgetLevel::Unknown
+        );
+        assert_eq!(budget.unit, crate::protocol::ClientShellBudgetUnit::Unknown);
     }
 
     #[test]

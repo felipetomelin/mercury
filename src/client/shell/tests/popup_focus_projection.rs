@@ -952,6 +952,7 @@ fn sidebar_scrollbars_use_proportional_shared_geometry_and_drag() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: false,
+            usage: None,
         });
     }
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
@@ -1026,6 +1027,68 @@ fn popup_preemption_cancels_settings_theme_preview() {
     ));
     assert_eq!(state.config.theme_name, original_theme);
     assert_eq!(state.config.palette, original_palette);
+}
+
+#[test]
+fn mercury_theme_preview_applies_immediately_and_cancel_restores_original() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.open_settings_overlay();
+    let original = state.config.palette.clone();
+    let mercury = crate::config::THEME_NAMES
+        .iter()
+        .position(|name| *name == "mercury")
+        .unwrap();
+    state.select_settings_choice(mercury);
+    assert_eq!(state.config.theme_name, "mercury");
+    assert_eq!(state.config.palette, crate::app::state::Palette::mercury());
+    state.cancel_settings_overlay();
+    assert_eq!(state.config.theme_name, "catppuccin");
+    assert_eq!(state.config.palette, original);
+}
+
+#[test]
+fn imported_ghostty_theme_is_available_in_picker_and_preview() {
+    let path = std::env::temp_dir().join(format!(
+        "mercury-picker-theme-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::write(
+        &path,
+        "background = #112233\nforeground = #ddeeff\npalette = 2=#11aa22\n",
+    )
+    .unwrap();
+    let config: Config = toml::from_str(&format!(
+        "[theme]\nname = \"catppuccin\"\n[[theme.import]]\nname = \"ocean\"\npath = {:?}\nformat = \"ghostty\"\n",
+        path.display().to_string()
+    ))
+    .unwrap();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.open_settings_overlay();
+    let Some(ClientShellOverlay::Settings(settings)) = state.overlay.as_ref() else {
+        panic!("settings overlay expected");
+    };
+    let index = settings
+        .theme_names
+        .iter()
+        .position(|name| name == "ocean")
+        .unwrap();
+    state.select_settings_choice(index);
+    assert_eq!(state.config.theme_name, "ocean");
+    assert_eq!(
+        state.config.palette.panel_bg,
+        ratatui::style::Color::Rgb(0x11, 0x22, 0x33)
+    );
+    assert_eq!(
+        state.config.palette.gauge_ok,
+        ratatui::style::Color::Rgb(0x11, 0xaa, 0x22)
+    );
+    state.cancel_settings_overlay();
+    assert_eq!(state.config.theme_name, "catppuccin");
+    std::fs::remove_file(path).unwrap();
 }
 
 #[test]

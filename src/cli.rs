@@ -25,34 +25,36 @@ macro_rules! println {
 mod agent;
 mod api;
 mod completion;
+mod cron;
+mod history;
 mod integration;
+mod knowledge;
+mod learn;
 mod machine;
 mod notification;
 mod pane;
 mod plugin;
 mod protocol_guard;
+mod route;
 mod runtime;
 mod server;
 mod server_not_running;
 mod spec;
 mod status;
+mod statusline;
 mod tab;
 mod target;
 mod workspace;
 mod worktree;
 
 const TERMINAL_SESSION_OBSERVE_USAGE: &str =
-    "usage: herdr terminal session observe <target> [--cols N] [--rows N]";
+    "usage: mercury terminal session observe <target> [--cols N] [--rows N]";
 const TERMINAL_SESSION_CONTROL_USAGE: &str =
-    "usage: herdr terminal session control <target> [--takeover] [--cols N] [--rows N]";
+    "usage: mercury terminal session control <target> [--takeover] [--cols N] [--rows N]";
 pub(crate) const AGENT_HELP_FOOTER: &str = concat!(
     "Are you an AI? Use these resources ONLY IF your task specifically asks you to:\n",
-    "  Help a human understand or set up Herdr for the first time:\n",
-    "    https://herdr.dev/agent-guide.md\n",
-    "  Debug or investigate a problem with Herdr:\n",
-    "    https://herdr.dev/llms.txt\n",
-    "  Control Herdr panes, agents, or workspaces:\n",
-    "    SKIP if a Herdr skill is already in your context. Otherwise run: herdr --skill",
+    "  Control Mercury panes, agents, or workspaces:\n",
+    "    SKIP if a Mercury skill is already in your context. Otherwise run: mercury --skill",
 );
 
 pub(crate) fn parse_token_assignment(raw: &str) -> Result<(String, Option<String>), String> {
@@ -116,8 +118,15 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
         }
         "api" => api::run_api_command(&args[2..])?,
         "status" => status::run_status_command(&args[2..])?,
+        "statusline" => statusline::run_statusline_command(&args[2..])?,
         "completion" | "completions" => completion::run_completion_command(&args[2..])?,
         "config" => run_config_command(&args[2..])?,
+        "cron" => cron::run_cron_command(&args[2..])?,
+        "history" => history::run_history_command(&args[2..])?,
+        "knowledge" => knowledge::run(&args[2..], false)?,
+        "context" => knowledge::run(&args[2..], true)?,
+        "learn" => learn::run_learn_command(&args[2..])?,
+        "route" => route::run_route_command(&args[2..])?,
         "channel" => run_channel_command(&args[2..])?,
         "machine" => machine::run_machine_command(&args[2..])?,
         "workspace" => workspace::run_workspace_command(&args[2..])?,
@@ -157,7 +166,7 @@ fn run_channel_command(args: &[String]) -> std::io::Result<i32> {
 
 fn channel_set(args: &[String]) -> std::io::Result<i32> {
     let Some(channel) = parse_channel_set_arg(args) else {
-        eprintln!("usage: herdr channel set <stable|preview>");
+        eprintln!("usage: mercury channel set <stable|preview>");
         return Ok(2);
     };
 
@@ -201,7 +210,7 @@ fn channel_set(args: &[String]) -> std::io::Result<i32> {
     }
     std::fs::write(&path, updated)?;
     println!(
-        "Herdr update channel set to {channel} in {}.",
+        "Mercury update channel set to {channel} in {}.",
         path.display()
     );
 
@@ -218,7 +227,7 @@ fn channel_set(args: &[String]) -> std::io::Result<i32> {
     crate::platform::end_cli_output();
     if let Err(err) = crate::update::self_update(crate::update::SelfUpdateOptions::default()) {
         eprintln!("update failed: {err}");
-        eprintln!("Run `herdr update` to retry.");
+        eprintln!("Run `mercury update` to retry.");
         return Ok(1);
     }
 
@@ -261,9 +270,9 @@ fn channel_set_install_action(
 }
 
 fn print_channel_help() {
-    eprintln!("herdr channel commands:");
-    eprintln!("  herdr channel show                  print the configured update channel");
-    eprintln!("  herdr channel set <stable|preview>  choose the update channel");
+    eprintln!("mercury channel commands:");
+    eprintln!("  mercury channel show                  print the configured update channel");
+    eprintln!("  mercury channel set <stable|preview>  choose the update channel");
 }
 
 fn run_config_command(args: &[String]) -> std::io::Result<i32> {
@@ -290,11 +299,11 @@ fn config_check(args: &[String]) -> std::io::Result<i32> {
     match args {
         [] => {}
         [flag] if matches!(flag.as_str(), "help" | "--help" | "-h") => {
-            eprintln!("usage: herdr config check");
+            eprintln!("usage: mercury config check");
             return Ok(0);
         }
         _ => {
-            eprintln!("usage: herdr config check");
+            eprintln!("usage: mercury config check");
             return Ok(2);
         }
     }
@@ -314,7 +323,7 @@ fn config_check(args: &[String]) -> std::io::Result<i32> {
 
 fn config_reset_keys(args: &[String]) -> std::io::Result<i32> {
     if !args.is_empty() {
-        eprintln!("usage: herdr config reset-keys");
+        eprintln!("usage: mercury config reset-keys");
         return Ok(2);
     }
 
@@ -379,8 +388,10 @@ fn config_reset_keys(args: &[String]) -> std::io::Result<i32> {
         "Removed [keys], [keys.indexed], and [[keys.command]] from {}.",
         path.display()
     );
-    println!("Built-in v2 keybindings will apply after Herdr restarts or reloads config.");
-    println!("If a Herdr server is running, run `herdr server reload-config` to apply this now.");
+    println!("Built-in v2 keybindings will apply after Mercury restarts or reloads config.");
+    println!(
+        "If a Mercury server is running, run `mercury server reload-config` to apply this now."
+    );
     println!(
         "To restore: cp {} {}",
         backup_path.display(),
@@ -449,15 +460,15 @@ fn session_attach_help(args: &[String]) -> std::io::Result<i32> {
         args.first().map(String::as_str),
         Some("help" | "--help" | "-h")
     ) {
-        eprintln!("usage: herdr session attach <name>");
+        eprintln!("usage: mercury session attach <name>");
         return Ok(0);
     }
-    eprintln!("usage: herdr session attach <name>");
+    eprintln!("usage: mercury session attach <name>");
     Ok(2)
 }
 
 fn session_list(args: &[String]) -> std::io::Result<i32> {
-    let json = match parse_session_json_only(args, "usage: herdr session list [--json]") {
+    let json = match parse_session_json_only(args, "usage: mercury session list [--json]") {
         Ok(json) => json,
         Err(code) => return Ok(code),
     };
@@ -475,7 +486,7 @@ fn session_list(args: &[String]) -> std::io::Result<i32> {
 
 fn session_stop(args: &[String]) -> std::io::Result<i32> {
     let (name, json) =
-        match parse_session_name_and_json(args, "usage: herdr session stop <name> [--json]") {
+        match parse_session_name_and_json(args, "usage: mercury session stop <name> [--json]") {
             Ok(parsed) => parsed,
             Err(code) => return Ok(code),
         };
@@ -508,7 +519,7 @@ fn session_stop(args: &[String]) -> std::io::Result<i32> {
 
 fn session_delete(args: &[String]) -> std::io::Result<i32> {
     let (name, json) =
-        match parse_session_name_and_json(args, "usage: herdr session delete <name> [--json]") {
+        match parse_session_name_and_json(args, "usage: mercury session delete <name> [--json]") {
             Ok(parsed) => parsed,
             Err(code) => return Ok(code),
         };
@@ -535,7 +546,7 @@ fn session_delete(args: &[String]) -> std::io::Result<i32> {
 fn terminal_attach(args: &[String]) -> std::io::Result<i32> {
     let (terminal_id, takeover) = match parse_attach_target(
         args,
-        "usage: herdr terminal attach <terminal_id> [--takeover]",
+        "usage: mercury terminal attach <terminal_id> [--takeover]",
     ) {
         Ok(parsed) => parsed,
         Err(code) => return Ok(code),
@@ -687,7 +698,7 @@ fn terminal_title(args: &[String]) -> std::io::Result<i32> {
     match args.first().map(|arg| arg.as_str()) {
         Some("set") => {
             if args.len() != 2 {
-                eprintln!("usage: herdr terminal title set <title>");
+                eprintln!("usage: mercury terminal title set <title>");
                 return Ok(2);
             }
             print_response(&send_request(&Request {
@@ -699,7 +710,7 @@ fn terminal_title(args: &[String]) -> std::io::Result<i32> {
         }
         Some("clear") => {
             if args.len() != 1 {
-                eprintln!("usage: herdr terminal title clear");
+                eprintln!("usage: mercury terminal title clear");
                 return Ok(2);
             }
             print_response(&send_request(&Request {
@@ -708,13 +719,13 @@ fn terminal_title(args: &[String]) -> std::io::Result<i32> {
             })?)
         }
         Some("help" | "--help" | "-h") => {
-            eprintln!("usage: herdr terminal title set <title>");
-            eprintln!("       herdr terminal title clear");
+            eprintln!("usage: mercury terminal title set <title>");
+            eprintln!("       mercury terminal title clear");
             Ok(0)
         }
         _ => {
-            eprintln!("usage: herdr terminal title set <title>");
-            eprintln!("       herdr terminal title clear");
+            eprintln!("usage: mercury terminal title set <title>");
+            eprintln!("       mercury terminal title clear");
             Ok(2)
         }
     }
@@ -768,7 +779,7 @@ pub(super) fn send_ok_request(method: Method) -> std::io::Result<i32> {
 
 pub(super) fn send_request(request: &Request) -> std::io::Result<serde_json::Value> {
     let client = target::api_client()?;
-    ensure_server_protocol_compatible(&client, &request.id)?;
+    ensure_server_protocol_compatible(&client, request)?;
     client
         .request_value(request)
         .map_err(|err| map_server_not_running_or_io(err, &request.id, &client))
@@ -781,15 +792,27 @@ pub(super) fn send_request_unchecked(request: &Request) -> std::io::Result<serde
         .map_err(|err| map_server_not_running_or_io(err, &request.id, &client))
 }
 
-fn ensure_server_protocol_compatible(client: &ApiClient, request_id: &str) -> std::io::Result<()> {
+fn ensure_server_protocol_compatible(client: &ApiClient, request: &Request) -> std::io::Result<()> {
     let status = target::server_status(client)
-        .map_err(|err| map_server_not_running_or_io(err, request_id, client))?;
+        .map_err(|err| map_server_not_running_or_io(err, &request.id, client))?;
     let server_protocol = status
         .protocol
         .ok_or_else(|| std::io::Error::other("server ping did not include a protocol version"))?;
-    let Some(response) =
-        protocol_guard::mismatch_response(request_id, server_protocol, &target::restart_guidance())
-    else {
+    let method_name = crate::api::api_method_name(&request.method);
+    let guidance = target::restart_guidance();
+    let response = protocol_guard::mismatch_response(&request.id, server_protocol, &guidance)
+        .or_else(|| {
+            protocol_guard::missing_mercury_features_response(
+                &request.id,
+                method_name,
+                status
+                    .capabilities
+                    .as_ref()
+                    .and_then(|capabilities| capabilities.mercury_feature_generation),
+                "Use `mercury server live-handoff --import-exe <new-binary-path>` from a normal terminal to preserve panes; stopping the server exits pane processes.",
+            )
+        });
+    let Some(response) = response else {
         return Ok(());
     };
 
@@ -1023,27 +1046,27 @@ fn print_session_error(code: &str, message: &str) {
 }
 
 fn print_config_help() {
-    eprintln!("herdr config commands:");
-    eprintln!("  herdr config check  validate config.toml and print diagnostics");
-    eprintln!("  herdr config reset-keys  back up config.toml and remove custom keybindings");
+    eprintln!("mercury config commands:");
+    eprintln!("  mercury config check  validate config.toml and print diagnostics");
+    eprintln!("  mercury config reset-keys  back up config.toml and remove custom keybindings");
 }
 
 fn print_terminal_help() {
-    eprintln!("herdr terminal commands:");
-    eprintln!("  herdr terminal attach <terminal_id> [--takeover]");
-    eprintln!("  herdr terminal session control <target> [--takeover] [--cols N] [--rows N]");
-    eprintln!("  herdr terminal session observe <target> [--cols N] [--rows N]");
-    eprintln!("  herdr terminal title set <title>");
-    eprintln!("  herdr terminal title clear");
+    eprintln!("mercury terminal commands:");
+    eprintln!("  mercury terminal attach <terminal_id> [--takeover]");
+    eprintln!("  mercury terminal session control <target> [--takeover] [--cols N] [--rows N]");
+    eprintln!("  mercury terminal session observe <target> [--cols N] [--rows N]");
+    eprintln!("  mercury terminal title set <title>");
+    eprintln!("  mercury terminal title clear");
     eprintln!("  detach from direct attach with ctrl+b q; send literal ctrl+b with ctrl+b ctrl+b");
 }
 
 fn print_session_help() {
-    eprintln!("herdr session commands:");
-    eprintln!("  herdr session list [--json]");
-    eprintln!("  herdr session attach <name>");
-    eprintln!("  herdr session stop <name> [--json]");
-    eprintln!("  herdr session delete <name> [--json]");
+    eprintln!("mercury session commands:");
+    eprintln!("  mercury session list [--json]");
+    eprintln!("  mercury session attach <name>");
+    eprintln!("  mercury session stop <name> [--json]");
+    eprintln!("  mercury session delete <name> [--json]");
     eprintln!("  use 'default' as <name> to target the default session for stop");
 }
 
@@ -1108,15 +1131,15 @@ mod tests {
     #[test]
     fn parse_env_assignment_accepts_empty_values() {
         assert_eq!(
-            super::parse_env_assignment("HERDR_ROLE=").unwrap(),
-            ("HERDR_ROLE".to_string(), String::new())
+            super::parse_env_assignment("MERCURY_ROLE=").unwrap(),
+            ("MERCURY_ROLE".to_string(), String::new())
         );
     }
 
     #[test]
     fn parse_env_assignment_requires_key_value_separator() {
         assert_eq!(
-            super::parse_env_assignment("HERDR_ROLE").unwrap_err(),
+            super::parse_env_assignment("MERCURY_ROLE").unwrap_err(),
             "env must use KEY=VALUE"
         );
     }

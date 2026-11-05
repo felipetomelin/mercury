@@ -445,6 +445,15 @@ impl ClientShellState {
     }
 
     pub(super) fn insert_overlay_text(&mut self, text: &str) -> bool {
+        if self.view == ClientShellView::Crons
+            && self.crons_view.form.is_some()
+            && self.overlay.is_none()
+        {
+            if let Some(f) = self.crons_view.form.as_mut() {
+                f.insert(text);
+            }
+            return true;
+        }
         if self.insert_worktree_overlay_text(text) {
             return true;
         }

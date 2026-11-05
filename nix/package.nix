@@ -15,7 +15,7 @@
 let
   manifest = lib.importTOML ../Cargo.toml;
   zigDeps = callPackage ../vendor/libghostty-vt/build.zig.zon.nix {
-    name = "herdr-libghostty-vt-zig-cache";
+    name = "mercury-libghostty-vt-zig-cache";
     inherit zstd;
     linkFarm =
       name: entries:
@@ -32,7 +32,7 @@ let
   ];
 in
 rustPlatform.buildRustPackage {
-  pname = "herdr";
+  pname = "mercury";
   version = manifest.package.version;
 
   src = lib.fileset.toSource {
@@ -41,8 +41,7 @@ rustPlatform.buildRustPackage {
       lib.fileset.unions [
         ../assets
         ../crates
-        ../distribution/install.ps1
-        ../docs/next/api/herdr-api.schema.json
+        ../docs/next/api/mercury-api.schema.json
         ../src
         ../vendor/libghostty-vt
         ../vendor/libghostty-vt.vendor.json
@@ -50,7 +49,7 @@ rustPlatform.buildRustPackage {
         ../build.rs
         ../Cargo.lock
         ../Cargo.toml
-        ../skills/herdr/SKILL.md
+        ../skills/mercury/SKILL.md
       ]
     );
   };
@@ -82,10 +81,8 @@ rustPlatform.buildRustPackage {
   doCheck = false;
 
   meta = {
-    description = "Terminal workspace manager for AI coding agents";
-    homepage = "https://herdr.dev";
-    license = lib.licenses.asl20;
-    mainProgram = "herdr";
+    description = "Terminal agent controller for Claude Code + Codex CLI";
+    mainProgram = "mercury";
     platforms = lib.platforms.linux ++ lib.platforms.darwin;
   };
 }

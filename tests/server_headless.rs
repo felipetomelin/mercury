@@ -13,10 +13,14 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use mercury_learn::policy::{Policy, Proposal, TargetKind, TargetPolicy};
+use mercury_learn::storage::{hash, Storage, TriggerStatus};
+use mercury_learn::Changes;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use serde_json::{json, Value};
 use support::{
-    cleanup_test_base, client_handshake, register_runtime_dir, register_spawned_herdr_pid,
-    unregister_spawned_herdr_pid, CURRENT_PROTOCOL,
+    cleanup_test_base, client_handshake, register_runtime_dir, register_spawned_mercury_pid,
+    unregister_spawned_mercury_pid, CURRENT_PROTOCOL,
 };
 
 fn unique_test_dir() -> PathBuf {
@@ -25,23 +29,23 @@ fn unique_test_dir() -> PathBuf {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     PathBuf::from(format!(
-        "/tmp/herdr-server-test-{}-{nanos}",
+        "/tmp/mercury-server-test-{}-{nanos}",
         std::process::id()
     ))
 }
 
-struct SpawnedHerdr {
+struct SpawnedMercury {
     _master: Option<Box<dyn MasterPty + Send>>,
     child: Box<dyn Child + Send + Sync>,
 }
 
-impl SpawnedHerdr {
+impl SpawnedMercury {
     fn close_master(&mut self) {
         drop(self._master.take());
     }
 }
 
-impl Drop for SpawnedHerdr {
+impl Drop for SpawnedMercury {
     fn drop(&mut self) {
         let pid = self.child.process_id();
         let _ = self.child.kill();
@@ -59,12 +63,12 @@ impl Drop for SpawnedHerdr {
                 thread::sleep(Duration::from_millis(20));
             }
 
-            unregister_spawned_herdr_pid(Some(pid));
+            unregister_spawned_mercury_pid(Some(pid));
         }
     }
 }
 
-fn cleanup_spawned_herdr(spawned: SpawnedHerdr, base: PathBuf) {
+fn cleanup_spawned_mercury(spawned: SpawnedMercury, base: PathBuf) {
     drop(spawned);
     cleanup_test_base(&base);
 }
@@ -103,12 +107,12 @@ fn spawn_server(
     runtime_dir: &Path,
     api_socket_path: &Path,
     _client_socket_path: &Path,
-) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("herdr")).unwrap();
+) -> SpawnedMercury {
+    fs::create_dir_all(config_home.join("mercury")).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
     fs::write(
-        config_home.join("herdr/config.toml"),
+        config_home.join("mercury/config.toml"),
         "onboarding = false\n",
     )
     .unwrap();
@@ -122,20 +126,21 @@ fn spawn_server(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_mercury"));
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-    cmd.env("HERDR_SOCKET_PATH", api_socket_path);
-    cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
+    cmd.env("XDG_DATA_HOME", runtime_dir.join("data"));
+    cmd.env("MERCURY_SOCKET_PATH", api_socket_path);
+    cmd.env_remove("MERCURY_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
-    cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("MERCURY_ENV");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
-    register_spawned_herdr_pid(child.process_id());
+    register_spawned_mercury_pid(child.process_id());
     drop(pair.slave);
 
-    SpawnedHerdr {
+    SpawnedMercury {
         _master: Some(pair.master),
         child,
     }
@@ -153,9 +158,185 @@ fn ping_socket(socket_path: &Path) -> String {
     response.trim().to_string()
 }
 
+fn learn_socket_request(socket_path: &Path, method: &str, params: Value) -> (Value, String) {
+    let mut stream = UnixStream::connect(socket_path).expect("should connect to API socket");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    writeln!(
+        stream,
+        "{}",
+        json!({"id":"learn-smoke","method":method,"params":params})
+    )
+    .unwrap();
+    let mut raw = String::new();
+    BufReader::new(stream).read_line(&mut raw).unwrap();
+    let parsed = serde_json::from_str(&raw).expect("valid Learn response JSON");
+    (parsed, raw)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[test]
+fn learn_socket_inspects_redacted_change_and_undoes_exact_fixture_bytes() {
+    let _lock = test_lock();
+    let logical_base = unique_test_dir();
+    let base = logical_base
+        .parent()
+        .unwrap()
+        .canonicalize()
+        .unwrap()
+        .join(logical_base.file_name().unwrap());
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("mercury.sock");
+    fs::create_dir_all(&base).unwrap();
+    let target = base.join("AGENTS.md");
+    let before = b"secret-before\n";
+    let after = b"secret-after\n";
+    fs::write(&target, before).unwrap();
+    let policy = Policy::new(vec![TargetPolicy {
+        id: "instructions".into(),
+        path: target.clone(),
+        kind: TargetKind::Instructions,
+        max_bytes: 1024,
+    }])
+    .unwrap();
+    let app_dir = if cfg!(debug_assertions) {
+        "mercury-dev"
+    } else {
+        "mercury"
+    };
+    let storage = Storage::open(&config_home.join(app_dir).join("learn")).unwrap();
+    let record = Changes::new(storage)
+        .apply(
+            &policy,
+            true,
+            Proposal {
+                target_id: "instructions".into(),
+                content: String::from_utf8(after.to_vec()).unwrap(),
+                reason: "private fixture reason".into(),
+                source: "test/session".into(),
+            },
+            &hash(before),
+        )
+        .unwrap();
+    assert_eq!(fs::read(&target).unwrap(), after);
+    let mut trigger_ledger = Storage::open(&config_home.join(app_dir).join("learn")).unwrap();
+    trigger_ledger
+        .claim_trigger("claude:private-session-1:end")
+        .unwrap();
+    trigger_ledger
+        .finish_trigger("claude:private-session-1:end", TriggerStatus::Succeeded)
+        .unwrap();
+    drop(trigger_ledger);
+
+    let spawned = spawn_server(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        &runtime_dir.join("client.sock"),
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+
+    let (list, list_raw) = learn_socket_request(&api_socket, "learn.list", json!({"limit": 1}));
+    assert_eq!(list["result"]["type"], "learn_list");
+    assert_eq!(list["result"]["changes"][0]["id"], record.id);
+    assert_eq!(list["result"]["changes"][0]["status"], "applied");
+    let (show, show_raw) =
+        learn_socket_request(&api_socket, "learn.show", json!({"change_id": record.id}));
+    assert_eq!(show["result"]["detail"]["reason_redacted"], true);
+    assert_eq!(show["result"]["detail"]["backup_available"], true);
+    let (diff, diff_raw) =
+        learn_socket_request(&api_socket, "learn.diff", json!({"change_id": record.id}));
+    assert_eq!(diff["result"]["diff"]["content_redacted"], true);
+    assert_eq!(diff["result"]["diff"]["summary"]["removed_lines"], 1);
+    for raw in [&list_raw, &show_raw, &diff_raw] {
+        assert!(!raw.contains("secret-before"));
+        assert!(!raw.contains("secret-after"));
+        assert!(!raw.contains("private fixture reason"));
+        assert!(!raw.contains(target.to_str().unwrap()));
+    }
+    let cli = std::process::Command::new(env!("CARGO_BIN_EXE_mercury"))
+        .args(["learn", "list", "--json"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("MERCURY_SOCKET_PATH", &api_socket)
+        .output()
+        .unwrap();
+    assert!(cli.status.success(), "Learn CLI failed: {:?}", cli.stderr);
+    let cli_list: Value = serde_json::from_slice(&cli.stdout).unwrap();
+    assert_eq!(cli_list["result"]["changes"][0]["id"], record.id);
+    assert!(!cli
+        .stdout
+        .windows(before.len())
+        .any(|chunk| chunk == before));
+
+    let (undone, _) =
+        learn_socket_request(&api_socket, "learn.undo", json!({"change_id": record.id}));
+    assert_eq!(undone["result"]["change"]["status"], "undone");
+    assert_eq!(fs::read(&target).unwrap(), before);
+    let (status, _) = learn_socket_request(&api_socket, "learn.status", json!({}));
+    assert_eq!(status["result"]["status"]["changes"]["undone"], 1);
+    let trigger = &status["result"]["status"]["recent_triggers"][0];
+    assert_eq!(trigger["kind"], "session_end");
+    assert_eq!(trigger["status"], "succeeded");
+    assert_eq!(trigger["fingerprint"].as_str().unwrap().len(), 16);
+    assert!(!status.to_string().contains("private-session-1"));
+    let (duplicate_undo, _) =
+        learn_socket_request(&api_socket, "learn.undo", json!({"change_id": record.id}));
+    assert_eq!(duplicate_undo["error"]["code"], "learn_invalid_state");
+
+    let second = Changes::new(Storage::open(&config_home.join(app_dir).join("learn")).unwrap())
+        .apply(
+            &policy,
+            true,
+            Proposal {
+                target_id: "instructions".into(),
+                content: String::from_utf8(after.to_vec()).unwrap(),
+                reason: "second private fixture reason".into(),
+                source: "test/session-2".into(),
+            },
+            &hash(before),
+        )
+        .unwrap();
+    let cli_undo = std::process::Command::new(env!("CARGO_BIN_EXE_mercury"))
+        .args(["learn", "undo", &second.id, "--json"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("MERCURY_SOCKET_PATH", &api_socket)
+        .output()
+        .unwrap();
+    assert!(
+        cli_undo.status.success(),
+        "Learn CLI undo failed: {:?}",
+        cli_undo.stderr
+    );
+    let cli_undo_response: Value = serde_json::from_slice(&cli_undo.stdout).unwrap();
+    assert_eq!(cli_undo_response["result"]["change"]["status"], "undone");
+    assert_eq!(fs::read(&target).unwrap(), before);
+
+    let third = Changes::new(Storage::open(&config_home.join(app_dir).join("learn")).unwrap())
+        .apply(
+            &policy,
+            true,
+            Proposal {
+                target_id: "instructions".into(),
+                content: String::from_utf8(after.to_vec()).unwrap(),
+                reason: "third private fixture reason".into(),
+                source: "test/session-3".into(),
+            },
+            &hash(before),
+        )
+        .unwrap();
+    fs::write(&target, b"human-edit\n").unwrap();
+    let (conflict, _) =
+        learn_socket_request(&api_socket, "learn.undo", json!({"change_id": third.id}));
+    assert_eq!(conflict["error"]["code"], "learn_conflict");
+    assert_eq!(fs::read(&target).unwrap(), b"human-edit\n");
+
+    cleanup_spawned_mercury(spawned, base);
+}
 
 #[test]
 fn server_creates_both_sockets() {
@@ -163,8 +344,8 @@ fn server_creates_both_sockets() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
 
@@ -187,7 +368,7 @@ fn server_creates_both_sockets() {
         "ping should return pong: {response}"
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }
 
 #[test]
@@ -196,8 +377,8 @@ fn server_starts_without_terminal() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
 
@@ -210,7 +391,7 @@ fn server_starts_without_terminal() {
         assert_eq!(result, 0, "server process should be running");
     }
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }
 
 #[test]
@@ -219,8 +400,8 @@ fn server_api_responds_to_ping() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -232,7 +413,7 @@ fn server_api_responds_to_ping() {
         "API should respond to ping: {response}"
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }
 
 #[test]
@@ -241,8 +422,8 @@ fn server_removes_client_socket_on_exit() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -275,8 +456,8 @@ fn server_cleans_up_stale_client_socket() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     // Create a stale client socket file (simulating a crashed server).
     fs::create_dir_all(&runtime_dir).unwrap();
@@ -297,7 +478,7 @@ fn server_cleans_up_stale_client_socket() {
         "API should respond to ping: {response}"
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }
 
 #[test]
@@ -306,8 +487,8 @@ fn server_persists_after_client_disconnect() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -329,7 +510,7 @@ fn server_persists_after_client_disconnect() {
         "API should still respond after client disconnect: {response}"
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }
 
 #[test]
@@ -338,8 +519,8 @@ fn duplicate_server_start_fails_gracefully() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     // Start the first server.
     let spawned1 = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
@@ -355,27 +536,28 @@ fn duplicate_server_start_fails_gracefully() {
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_mercury"));
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", &config_home);
     cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
-    cmd.env("HERDR_SOCKET_PATH", &api_socket);
-    cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
+    cmd.env("XDG_DATA_HOME", runtime_dir.join("data"));
+    cmd.env("MERCURY_SOCKET_PATH", &api_socket);
+    cmd.env_remove("MERCURY_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
-    cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("MERCURY_ENV");
 
     let mut child2 = pair.slave.spawn_command(cmd).unwrap();
-    register_spawned_herdr_pid(child2.process_id());
+    register_spawned_mercury_pid(child2.process_id());
     drop(pair.slave);
 
     // Wait for the second server to exit.
     let exit_status = child2.wait().unwrap();
-    unregister_spawned_herdr_pid(child2.process_id());
+    unregister_spawned_mercury_pid(child2.process_id());
 
     // The second server should exit with a non-zero code.
     assert!(!exit_status.success(), "duplicate server start should fail");
 
-    cleanup_spawned_herdr(spawned1, base);
+    cleanup_spawned_mercury(spawned1, base);
 }
 
 #[test]
@@ -384,8 +566,8 @@ fn client_handshake_succeeds() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -408,7 +590,7 @@ fn client_handshake_succeeds() {
         error
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }
 
 #[test]
@@ -417,8 +599,8 @@ fn client_handshake_rejects_incompatible_version() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -439,7 +621,7 @@ fn client_handshake_rejects_incompatible_version() {
         "version 0 should be rejected with an error"
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }
 
 #[test]
@@ -448,8 +630,8 @@ fn client_handshake_clamps_small_terminal_size() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -468,7 +650,7 @@ fn client_handshake_clamps_small_terminal_size() {
         error
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }
 
 #[test]
@@ -480,8 +662,8 @@ fn no_hello_client_closed_within_five_seconds() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -533,5 +715,5 @@ fn no_hello_client_closed_within_five_seconds() {
         "server should still respond to ping: {response}"
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }

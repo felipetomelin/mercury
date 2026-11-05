@@ -17,7 +17,7 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use serde_json::Value;
 use support::{
     cleanup_test_base, client_shell_handshake, drain_messages, register_runtime_dir,
-    register_spawned_herdr_pid, send_detach, unregister_spawned_herdr_pid, wait_for_disconnect,
+    register_spawned_mercury_pid, send_detach, unregister_spawned_mercury_pid, wait_for_disconnect,
     wait_for_socket, wait_until, CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL,
 };
 
@@ -40,17 +40,17 @@ fn unique_test_dir() -> PathBuf {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     PathBuf::from(format!(
-        "/tmp/herdr-detach-test-{}-{nanos}",
+        "/tmp/mercury-detach-test-{}-{nanos}",
         std::process::id()
     ))
 }
 
-struct SpawnedHerdr {
+struct SpawnedMercury {
     _master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
 }
 
-impl Drop for SpawnedHerdr {
+impl Drop for SpawnedMercury {
     fn drop(&mut self) {
         let pid = self.child.process_id();
         let _ = self.child.kill();
@@ -67,12 +67,12 @@ impl Drop for SpawnedHerdr {
                 thread::sleep(Duration::from_millis(20));
             }
 
-            unregister_spawned_herdr_pid(Some(pid));
+            unregister_spawned_mercury_pid(Some(pid));
         }
     }
 }
 
-fn cleanup_spawned_herdr(spawned: SpawnedHerdr, base: PathBuf) {
+fn cleanup_spawned_mercury(spawned: SpawnedMercury, base: PathBuf) {
     drop(spawned);
     cleanup_test_base(&base);
 }
@@ -89,7 +89,7 @@ fn spawn_server(
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
     client_socket_path: &PathBuf,
-) -> SpawnedHerdr {
+) -> SpawnedMercury {
     spawn_server_with_config(
         config_home,
         runtime_dir,
@@ -105,11 +105,11 @@ fn spawn_server_with_config(
     api_socket_path: &PathBuf,
     _client_socket_path: &PathBuf,
     config: &str,
-) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("herdr")).unwrap();
+) -> SpawnedMercury {
+    fs::create_dir_all(config_home.join("mercury")).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
-    fs::write(config_home.join("herdr/config.toml"), config).unwrap();
+    fs::write(config_home.join("mercury/config.toml"), config).unwrap();
 
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -120,21 +120,25 @@ fn spawn_server_with_config(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_mercury"));
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-    cmd.env("HERDR_SOCKET_PATH", api_socket_path);
-    cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
-    cmd.env("HERDR_CONFIG_PATH", config_home.join("herdr/config.toml"));
+    cmd.env("XDG_DATA_HOME", runtime_dir.join("data"));
+    cmd.env("MERCURY_SOCKET_PATH", api_socket_path);
+    cmd.env_remove("MERCURY_CLIENT_SOCKET_PATH");
+    cmd.env(
+        "MERCURY_CONFIG_PATH",
+        config_home.join("mercury/config.toml"),
+    );
     cmd.env("SHELL", "/bin/sh");
-    cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("MERCURY_ENV");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
-    register_spawned_herdr_pid(child.process_id());
+    register_spawned_mercury_pid(child.process_id());
     drop(pair.slave);
 
-    SpawnedHerdr {
+    SpawnedMercury {
         _master: pair.master,
         child,
     }
@@ -290,8 +294,8 @@ fn explicit_detach_message_causes_clean_disconnect() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -334,7 +338,7 @@ fn explicit_detach_message_causes_clean_disconnect() {
         "client connection should be closed after explicit Detach message"
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }
 
 #[test]
@@ -349,8 +353,8 @@ fn reattach_after_detach_shows_current_state() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -423,7 +427,7 @@ fn reattach_after_detach_shows_current_state() {
         "workspace should still exist after detach/reattach: {list_response}"
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }
 
 #[test]
@@ -440,8 +444,8 @@ fn processes_survive_during_and_after_detach() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -514,7 +518,7 @@ fn processes_survive_during_and_after_detach() {
     support::wait_for_client_shell_bootstrap(&mut stream_b, Duration::from_secs(5))
         .expect("client shell bootstrap");
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }
 
 #[test]
@@ -527,8 +531,8 @@ fn server_persists_after_client_connection_drop() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -568,7 +572,7 @@ fn server_persists_after_client_connection_drop() {
     assert_eq!(version, CURRENT_PROTOCOL);
     assert!(error.is_none(), "reattach should succeed: {:?}", error);
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }
 
 #[test]
@@ -577,8 +581,8 @@ fn pane_created_without_client_uses_configured_headless_size() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned = spawn_server_with_config(
         &config_home,
@@ -607,7 +611,7 @@ fn pane_created_without_client_uses_configured_headless_size() {
 
     assert_eq!(size, (41, 132));
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }
 
 #[test]
@@ -616,8 +620,8 @@ fn pane_created_after_detach_uses_configured_headless_size() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned = spawn_server_with_config(
         &config_home,
@@ -678,7 +682,7 @@ fn pane_created_after_detach_uses_configured_headless_size() {
     assert_eq!(headless_size, (41, 132));
     assert_eq!(preserved_size, attached_size);
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }
 
 #[test]
@@ -687,8 +691,8 @@ fn detached_output_preserves_last_attached_pty_size() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -736,7 +740,7 @@ fn detached_output_preserves_last_attached_pty_size() {
         "detached renders should not resize live pane PTYs to a fallback size"
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }
 
 #[test]
@@ -755,8 +759,8 @@ fn output_accumulated_while_detached_visible_on_reattach() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -831,5 +835,5 @@ fn output_accumulated_while_detached_visible_on_reattach() {
     support::wait_for_client_shell_bootstrap(&mut stream_b, Duration::from_secs(5))
         .expect("client shell bootstrap");
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }

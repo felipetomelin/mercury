@@ -4,6 +4,7 @@ use std::path::PathBuf;
 pub(crate) struct ClaudeInstallPaths {
     pub hook_path: PathBuf,
     pub settings_path: PathBuf,
+    pub statusline_installed: bool,
 }
 
 #[derive(Debug)]
@@ -210,6 +211,7 @@ pub(crate) struct ClaudeUninstallResult {
     pub settings_path: PathBuf,
     pub removed_hook_file: bool,
     pub updated_settings: bool,
+    pub statusline_removed: bool,
 }
 
 #[derive(Debug)]

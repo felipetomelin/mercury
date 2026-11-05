@@ -71,9 +71,69 @@ pub struct Palette {
     pub teal: Color,
     /// Interrupted / warning states.
     pub peach: Color,
+    /// Semantic context/budget gauge colors, independent of generic state colors.
+    pub gauge_ok: Color,
+    pub gauge_warn: Color,
+    pub gauge_crit: Color,
 }
 
 impl Palette {
+    /// Mercury dark: deep blue-black surfaces with a restrained sea-glass accent.
+    pub fn mercury() -> Self {
+        Self {
+            accent: Color::Rgb(42, 203, 177),
+            panel_bg: Color::Rgb(12, 22, 31),
+            sidebar_bg: Color::Reset,
+            active_row_bg: Color::Rgb(27, 49, 60),
+            selection_bg: Color::Rgb(39, 69, 79),
+            surface0: Color::Rgb(27, 49, 60),
+            surface1: Color::Rgb(42, 69, 79),
+            surface_dim: Color::Rgb(18, 34, 43),
+            overlay0: Color::Rgb(104, 131, 142),
+            overlay1: Color::Rgb(139, 164, 172),
+            text: Color::Rgb(225, 240, 238),
+            subtext0: Color::Rgb(165, 191, 195),
+            mauve: Color::Rgb(185, 161, 225),
+            green: Color::Rgb(95, 207, 162),
+            yellow: Color::Rgb(239, 193, 109),
+            red: Color::Rgb(239, 121, 128),
+            blue: Color::Rgb(115, 180, 232),
+            teal: Color::Rgb(42, 203, 177),
+            peach: Color::Rgb(239, 160, 117),
+            gauge_ok: Color::Rgb(95, 207, 162),
+            gauge_warn: Color::Rgb(239, 193, 109),
+            gauge_crit: Color::Rgb(239, 121, 128),
+        }
+    }
+
+    /// Mercury light keeps the same semantic hues against a pale surface.
+    pub fn mercury_light() -> Self {
+        Self {
+            accent: Color::Rgb(0, 119, 110),
+            panel_bg: Color::Rgb(244, 249, 247),
+            sidebar_bg: Color::Reset,
+            active_row_bg: Color::Rgb(217, 235, 231),
+            selection_bg: Color::Rgb(189, 219, 215),
+            surface0: Color::Rgb(217, 235, 231),
+            surface1: Color::Rgb(194, 221, 217),
+            surface_dim: Color::Rgb(229, 240, 237),
+            overlay0: Color::Rgb(104, 133, 138),
+            overlay1: Color::Rgb(74, 105, 113),
+            text: Color::Rgb(26, 58, 65),
+            subtext0: Color::Rgb(67, 100, 106),
+            mauve: Color::Rgb(119, 91, 170),
+            green: Color::Rgb(31, 129, 92),
+            yellow: Color::Rgb(156, 100, 0),
+            red: Color::Rgb(186, 61, 76),
+            blue: Color::Rgb(31, 100, 166),
+            teal: Color::Rgb(0, 119, 110),
+            peach: Color::Rgb(170, 89, 44),
+            gauge_ok: Color::Rgb(31, 129, 92),
+            gauge_warn: Color::Rgb(156, 100, 0),
+            gauge_crit: Color::Rgb(186, 61, 76),
+        }
+    }
+
     /// Catppuccin Mocha — the default.
     pub fn catppuccin() -> Self {
         Self {
@@ -96,6 +156,9 @@ impl Palette {
             blue: Color::Rgb(137, 180, 250),
             teal: Color::Rgb(148, 226, 213),
             peach: Color::Rgb(250, 179, 135),
+            gauge_ok: Color::Rgb(166, 227, 161),
+            gauge_warn: Color::Rgb(249, 226, 175),
+            gauge_crit: Color::Rgb(243, 139, 168),
         }
     }
 
@@ -121,6 +184,9 @@ impl Palette {
             blue: Color::Rgb(30, 102, 245),
             teal: Color::Rgb(23, 146, 153),
             peach: Color::Rgb(254, 100, 11),
+            gauge_ok: Color::Rgb(64, 160, 43),
+            gauge_warn: Color::Rgb(223, 142, 29),
+            gauge_crit: Color::Rgb(210, 15, 57),
         }
     }
 
@@ -146,6 +212,9 @@ impl Palette {
             blue: Color::Blue,
             teal: Color::Cyan,
             peach: Color::Yellow,
+            gauge_ok: Color::Green,
+            gauge_warn: Color::Yellow,
+            gauge_crit: Color::LightRed,
         }
     }
 
@@ -171,6 +240,9 @@ impl Palette {
             blue: Color::Rgb(122, 162, 247),
             teal: Color::Rgb(125, 207, 255),
             peach: Color::Rgb(255, 158, 100),
+            gauge_ok: Color::Rgb(158, 206, 106),
+            gauge_warn: Color::Rgb(224, 175, 104),
+            gauge_crit: Color::Rgb(247, 118, 142),
         }
     }
 
@@ -196,6 +268,9 @@ impl Palette {
             blue: Color::Rgb(46, 125, 233),
             teal: Color::Rgb(17, 140, 116),
             peach: Color::Rgb(177, 92, 0),
+            gauge_ok: Color::Rgb(88, 117, 57),
+            gauge_warn: Color::Rgb(140, 108, 62),
+            gauge_crit: Color::Rgb(245, 42, 101),
         }
     }
 
@@ -221,6 +296,9 @@ impl Palette {
             blue: Color::Rgb(139, 233, 253), // cyan-ish
             teal: Color::Rgb(139, 233, 253),
             peach: Color::Rgb(255, 184, 108),
+            gauge_ok: Color::Rgb(80, 250, 123),
+            gauge_warn: Color::Rgb(241, 250, 140),
+            gauge_crit: Color::Rgb(255, 85, 85),
         }
     }
 
@@ -246,6 +324,9 @@ impl Palette {
             blue: Color::Rgb(129, 161, 193),
             teal: Color::Rgb(143, 188, 187),
             peach: Color::Rgb(208, 135, 112),
+            gauge_ok: Color::Rgb(163, 190, 140),
+            gauge_warn: Color::Rgb(235, 203, 139),
+            gauge_crit: Color::Rgb(191, 97, 106),
         }
     }
 
@@ -271,6 +352,9 @@ impl Palette {
             blue: Color::Rgb(131, 165, 152),
             teal: Color::Rgb(142, 192, 124),
             peach: Color::Rgb(254, 128, 25),
+            gauge_ok: Color::Rgb(184, 187, 38),
+            gauge_warn: Color::Rgb(250, 189, 47),
+            gauge_crit: Color::Rgb(251, 73, 52),
         }
     }
 
@@ -296,6 +380,9 @@ impl Palette {
             blue: Color::Rgb(7, 102, 120),
             teal: Color::Rgb(66, 123, 88),
             peach: Color::Rgb(175, 58, 3),
+            gauge_ok: Color::Rgb(121, 116, 14),
+            gauge_warn: Color::Rgb(181, 118, 20),
+            gauge_crit: Color::Rgb(157, 0, 6),
         }
     }
 
@@ -321,6 +408,9 @@ impl Palette {
             blue: Color::Rgb(97, 175, 239),
             teal: Color::Rgb(86, 182, 194),
             peach: Color::Rgb(209, 154, 102),
+            gauge_ok: Color::Rgb(152, 195, 121),
+            gauge_warn: Color::Rgb(229, 192, 123),
+            gauge_crit: Color::Rgb(224, 108, 117),
         }
     }
 
@@ -346,6 +436,9 @@ impl Palette {
             blue: Color::Rgb(64, 120, 242),
             teal: Color::Rgb(1, 132, 188),
             peach: Color::Rgb(152, 104, 1),
+            gauge_ok: Color::Rgb(80, 161, 79),
+            gauge_warn: Color::Rgb(193, 132, 1),
+            gauge_crit: Color::Rgb(228, 86, 73),
         }
     }
 
@@ -371,6 +464,9 @@ impl Palette {
             blue: Color::Rgb(38, 139, 210),
             teal: Color::Rgb(42, 161, 152),
             peach: Color::Rgb(203, 75, 22),
+            gauge_ok: Color::Rgb(133, 153, 0),
+            gauge_warn: Color::Rgb(181, 137, 0),
+            gauge_crit: Color::Rgb(220, 50, 47),
         }
     }
 
@@ -396,6 +492,9 @@ impl Palette {
             blue: Color::Rgb(38, 139, 210),
             teal: Color::Rgb(42, 161, 152),
             peach: Color::Rgb(203, 75, 22),
+            gauge_ok: Color::Rgb(133, 153, 0),
+            gauge_warn: Color::Rgb(181, 137, 0),
+            gauge_crit: Color::Rgb(220, 50, 47),
         }
     }
 
@@ -421,6 +520,9 @@ impl Palette {
             blue: Color::Rgb(126, 156, 216),
             teal: Color::Rgb(127, 180, 202),
             peach: Color::Rgb(255, 160, 102),
+            gauge_ok: Color::Rgb(118, 148, 106),
+            gauge_warn: Color::Rgb(192, 163, 110),
+            gauge_crit: Color::Rgb(195, 64, 67),
         }
     }
 
@@ -446,6 +548,9 @@ impl Palette {
             blue: Color::Rgb(77, 105, 155),
             teal: Color::Rgb(78, 140, 162),
             peach: Color::Rgb(204, 109, 0),
+            gauge_ok: Color::Rgb(111, 137, 78),
+            gauge_warn: Color::Rgb(119, 113, 63),
+            gauge_crit: Color::Rgb(200, 64, 83),
         }
     }
 
@@ -471,6 +576,9 @@ impl Palette {
             blue: Color::Rgb(49, 116, 143),    // pine
             teal: Color::Rgb(156, 207, 216),   // foam
             peach: Color::Rgb(234, 154, 151),  // rose
+            gauge_ok: Color::Rgb(49, 116, 143),
+            gauge_warn: Color::Rgb(246, 193, 119),
+            gauge_crit: Color::Rgb(235, 111, 146),
         }
     }
 
@@ -496,6 +604,9 @@ impl Palette {
             blue: Color::Rgb(40, 105, 131),
             teal: Color::Rgb(86, 148, 159),
             peach: Color::Rgb(215, 130, 126),
+            gauge_ok: Color::Rgb(40, 105, 131),
+            gauge_warn: Color::Rgb(234, 157, 52),
+            gauge_crit: Color::Rgb(180, 99, 122),
         }
     }
 
@@ -521,12 +632,17 @@ impl Palette {
             blue: Color::Rgb(176, 176, 176),
             teal: Color::Rgb(102, 221, 204),
             peach: Color::Rgb(255, 199, 153),
+            gauge_ok: Color::Rgb(153, 255, 228),
+            gauge_warn: Color::Rgb(255, 199, 153),
+            gauge_crit: Color::Rgb(255, 128, 128),
         }
     }
 
     /// Resolve a theme by name. Returns None for unknown names.
     pub fn from_name(name: &str) -> Option<Self> {
         match crate::config::canonical_theme_name(name)? {
+            "mercury" => Some(Self::mercury()),
+            "mercury-light" => Some(Self::mercury_light()),
             "catppuccin" => Some(Self::catppuccin()),
             "catppuccin-latte" => Some(Self::catppuccin_latte()),
             "terminal" => Some(Self::terminal()),
@@ -609,6 +725,15 @@ impl Palette {
         if let Some(c) = &custom.peach {
             self.peach = parse_color(c);
         }
+        if let Some(c) = &custom.gauge_ok {
+            self.gauge_ok = parse_color(c);
+        }
+        if let Some(c) = &custom.gauge_warn {
+            self.gauge_warn = parse_color(c);
+        }
+        if let Some(c) = &custom.gauge_crit {
+            self.gauge_crit = parse_color(c);
+        }
         self
     }
 
@@ -671,6 +796,15 @@ impl Palette {
         if let Some(c) = &custom.peach {
             self.peach = parse_color(c);
         }
+        if let Some(c) = &custom.gauge_ok {
+            self.gauge_ok = parse_color(c);
+        }
+        if let Some(c) = &custom.gauge_warn {
+            self.gauge_warn = parse_color(c);
+        }
+        if let Some(c) = &custom.gauge_crit {
+            self.gauge_crit = parse_color(c);
+        }
         self
     }
 }
@@ -702,6 +836,7 @@ pub struct ThemeRuntimeConfig {
     pub auto_switch: bool,
     pub custom: Option<crate::config::CustomThemeColors>,
     pub legacy_accent: Option<String>,
+    pub imported: std::collections::BTreeMap<String, Palette>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -722,7 +857,7 @@ pub struct ToastNotification {
     pub kind: ToastKind,
     pub title: String,
     pub context: String,
-    pub position: Option<crate::config::ToastHerdrPosition>,
+    pub position: Option<crate::config::ToastMercuryPosition>,
     pub target: Option<ToastTarget>,
 }
 
@@ -816,7 +951,7 @@ pub struct AppState {
     pub config_diagnostic: Option<String>,
     pub toast: Option<ToastNotification>,
     pub pending_agent_notifications: std::collections::HashMap<PaneId, PendingAgentNotification>,
-    /// Last reported focus state for the outer terminal hosting herdr.
+    /// Last reported focus state for the outer terminal hosting mercury.
     /// None means unsupported or not yet reported, which preserves active-pane suppression.
     pub outer_terminal_focus: Option<bool>,
     // Config
@@ -869,7 +1004,7 @@ pub struct AppState {
     pub agent_manifest_summaries: Vec<crate::detect::manifest::AgentManifestSummary>,
     /// Cached remote detection manifest update diagnostics for runtime/API status.
     pub agent_manifest_update_status: crate::detect::manifest_update::ManifestUpdateStatus,
-    /// Installed or linked plugins known to this running Herdr instance.
+    /// Installed or linked plugins known to this running Mercury instance.
     pub(crate) installed_plugins: InstalledPluginRegistry,
     /// Pane ids opened through the plugin pane API.
     pub(crate) plugin_panes: std::collections::HashMap<PaneId, PluginPaneRecord>,
@@ -1030,7 +1165,7 @@ impl AppState {
             mode: Mode::Navigate,
             should_quit: false,
             request_client_config_reload: false,
-            worktree_directory: std::path::PathBuf::from("/tmp/herdr-worktrees"),
+            worktree_directory: std::path::PathBuf::from("/tmp/mercury-worktrees"),
             latest_release_notes: None,
             product_announcement: None,
             view: ViewState {
@@ -1038,7 +1173,7 @@ impl AppState {
                 pane_infos: Vec::new(),
             },
             update_available: None,
-            update_install_command: "herdr update".into(),
+            update_install_command: "mercury update".into(),
             latest_release_notes_available: false,
             update_dismissed: false,
             config_diagnostic: None,
@@ -1087,6 +1222,7 @@ impl AppState {
                 auto_switch: false,
                 custom: None,
                 legacy_accent: None,
+                imported: std::collections::BTreeMap::new(),
             },
             host_terminal_appearance: None,
             host_terminal_appearance_explicit: false,
@@ -1446,6 +1582,24 @@ mod tests {
                 "built-in theme changed the sidebar background: {name}"
             );
         }
+    }
+
+    #[test]
+    fn mercury_gauge_colors_can_be_overridden_without_changing_state_colors() {
+        let base = Palette::mercury();
+        let custom = crate::config::CustomThemeColors {
+            gauge_ok: Some("#123456".into()),
+            gauge_warn: Some("#aabbcc".into()),
+            gauge_crit: Some("#ff0055".into()),
+            ..Default::default()
+        };
+        let palette = base.clone().with_overrides(&custom);
+        assert_eq!(palette.gauge_ok, Color::Rgb(0x12, 0x34, 0x56));
+        assert_eq!(palette.gauge_warn, Color::Rgb(0xaa, 0xbb, 0xcc));
+        assert_eq!(palette.gauge_crit, Color::Rgb(0xff, 0x00, 0x55));
+        assert_eq!(palette.green, base.green);
+        assert_eq!(palette.yellow, base.yellow);
+        assert_eq!(palette.red, base.red);
     }
 
     #[test]

@@ -158,6 +158,15 @@ pub(super) fn snapshot_with_completions(
             state_labels.sort_by(|left, right| left.0.cmp(&right.0));
             let mut tokens = agent.tokens.into_iter().collect::<Vec<_>>();
             tokens.sort_by(|left, right| left.0.cmp(&right.0));
+            let usage = app
+                .parse_pane_id(&pane_id)
+                .and_then(|(workspace_index, pane_id)| {
+                    app.state
+                        .workspaces
+                        .get(workspace_index)?
+                        .pane_state(pane_id)
+                })
+                .and_then(|pane| app.usage.agent_usage_wire(&pane.attached_terminal_id));
             protocol::ClientShellAgent {
                 pane_id,
                 workspace_id: agent.workspace_id,
@@ -173,6 +182,7 @@ pub(super) fn snapshot_with_completions(
                 state_labels,
                 tokens,
                 focused,
+                usage,
             }
         })
         .collect();
@@ -263,6 +273,7 @@ pub(super) fn snapshot_with_completions(
         panes,
         agents,
         commands: app.client_shell_command_manifest(),
+        usage: app.usage_summary_wire(),
     };
     (shell, completions)
 }
@@ -641,7 +652,7 @@ mod tests {
         );
         app.state.integration_recommendations.clear();
         app.state.update_available = Some("0.8.3".into());
-        app.state.update_install_command = "herdr update".into();
+        app.state.update_install_command = "mercury update".into();
         app.state.latest_release_notes_available = true;
         app.state.latest_release_notes = Some(crate::release_notes::ReleaseNotes {
             version: "0.8.3".into(),
@@ -652,7 +663,7 @@ mod tests {
         let snapshot = snapshot(&app, "boot", 7, None, None);
 
         assert_eq!(snapshot.update_available.as_deref(), Some("0.8.3"));
-        assert_eq!(snapshot.update_install_command, "herdr update");
+        assert_eq!(snapshot.update_install_command, "mercury update");
         assert!(snapshot.latest_release_notes_available);
         assert!(!snapshot.integration_updates_available);
         assert_eq!(

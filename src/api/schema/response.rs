@@ -2,9 +2,14 @@ use serde::{Deserialize, Serialize};
 
 use super::agents::AgentInfo;
 use super::common::{ClientWindowTitleReason, NotificationShowReason};
+use super::cron::{CronJobInfo, CronRunInfo};
 use super::events::EventEnvelope;
+use super::history::{HistoryHitInfo, HistoryResumeInfo};
 use super::integrations::{
     IntegrationInstallResult, IntegrationTarget, IntegrationUninstallResult,
+};
+use super::learn::{
+    LearnChangeDetail, LearnChangeInfo, LearnDiffInfo, LearnStatusInfo, LearnUndoOutcome,
 };
 use super::panes::{
     LayoutDescription, PaneEdgesResult, PaneFocusDirectionResult, PaneInfo, PaneLayoutSnapshot,
@@ -15,6 +20,7 @@ use super::plugins::{
     InstalledPluginInfo, PluginActionInfo, PluginCommandLogInfo, PluginInvocationContext,
     PluginPaneInfo,
 };
+use super::route::RoutePreviewInfo;
 use super::server::ServerCapabilities;
 use super::session::SessionSnapshot;
 use super::tabs::TabInfo;
@@ -106,6 +112,66 @@ pub enum ResponseResult {
     },
     AgentList {
         agents: Vec<AgentInfo>,
+    },
+    CronJob {
+        job: CronJobInfo,
+    },
+    CronPreview {
+        utc_offset: String,
+        occurrences: Vec<i64>,
+    },
+    CronList {
+        jobs: Vec<CronJobInfo>,
+    },
+    CronDefinition {
+        job_id: String,
+        definition: super::cron::CronJobDefinition,
+    },
+    CronRun {
+        run_id: String,
+    },
+    CronRuns {
+        runs: Vec<CronRunInfo>,
+    },
+    CronLog {
+        run_id: String,
+        text: String,
+    },
+    CronDoctor {
+        findings: Vec<String>,
+    },
+    RoutePreview {
+        route: RoutePreviewInfo,
+    },
+    Knowledge {
+        data: serde_json::Value,
+    },
+    HistorySearch {
+        hits: Vec<HistoryHitInfo>,
+    },
+    HistoryResolve {
+        target: Option<HistoryResumeInfo>,
+    },
+    LearnList {
+        changes: Vec<LearnChangeInfo>,
+    },
+    LearnStatus {
+        status: LearnStatusInfo,
+    },
+    LearnShow {
+        detail: LearnChangeDetail,
+    },
+    LearnDiff {
+        diff: LearnDiffInfo,
+    },
+    LearnUndo {
+        change: LearnChangeInfo,
+    },
+    LearnUndoDate {
+        date: String,
+        outcomes: Vec<LearnUndoOutcome>,
+        interrupted: bool,
+        remaining_count: usize,
     },
     AgentView {
         active: bool,

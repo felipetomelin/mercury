@@ -7,7 +7,8 @@ use ratatui::{
 };
 
 pub(crate) use self::tokens::{
-    agent_rows as sidebar_agent_rows, space_rows as sidebar_space_rows, AgentTokenContext,
+    agent_rows as sidebar_agent_rows, context_gauge_text, format_cost_token, format_count,
+    format_model_token, format_tokens_token, space_rows as sidebar_space_rows, AgentTokenContext,
     ResolvedToken, ResolvedTokenKind, SpaceTokenContext,
 };
 use super::text::{display_width, truncate_end};
@@ -122,6 +123,9 @@ pub(crate) fn resolved_token_spans(
                     + usize::from(*behind > 0) * display_width(&format!("↓{behind}"))
                     + usize::from(*ahead > 0 && *behind > 0)
             }
+            ResolvedTokenKind::ContextGauge { permille, exact } => {
+                display_width(&tokens::context_gauge_text(*permille, *exact))
+            }
             _ => 0,
         })
         .collect::<Vec<_>>();
@@ -136,7 +140,8 @@ pub(crate) fn resolved_token_spans(
             | ResolvedTokenKind::Agent(text)
             | ResolvedTokenKind::TerminalTitle(text)
             | ResolvedTokenKind::Branch(text)
-            | ResolvedTokenKind::Custom(text) => display_width(text),
+            | ResolvedTokenKind::Custom(text)
+            | ResolvedTokenKind::Text(text) => display_width(text),
             _ => 0,
         })
         .collect::<Vec<_>>();
@@ -263,12 +268,21 @@ pub(crate) fn resolved_token_spans(
                     ));
                 }
             }
-            ResolvedTokenKind::TerminalTitle(text) | ResolvedTokenKind::Custom(text) => {
+            ResolvedTokenKind::TerminalTitle(text)
+            | ResolvedTokenKind::Custom(text)
+            | ResolvedTokenKind::Text(text) => {
                 spans.push(Span::styled(
                     truncate_end(text, budgets[index]),
                     apply_token_style(custom_style, token.style),
                 ));
             }
+            ResolvedTokenKind::ContextGauge { permille, exact } => spans.push(Span::styled(
+                tokens::context_gauge_text(*permille, *exact),
+                apply_token_style(
+                    Style::default().fg(tokens::context_gauge_color(*permille, palette)),
+                    token.style,
+                ),
+            )),
         }
     }
     spans

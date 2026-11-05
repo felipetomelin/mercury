@@ -1,7 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::api::schema::AgentStatus;
-use crate::protocol::{ClientShellAgent, ClientShellSnapshot, PaneSurfaceFrame};
+use crate::config::UsageConfig;
+use crate::protocol::{
+    ClientShellAgent, ClientShellBudgetLevel, ClientShellSnapshot, PaneSurfaceFrame,
+};
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct EndpointAgentPresentation {
@@ -9,6 +12,17 @@ pub(super) struct EndpointAgentPresentation {
     acknowledged: HashMap<String, u64>,
     completed: HashMap<String, u64>,
     working: HashSet<String>,
+    /// Panes that already fired the "contexto alto" toast since the last
+    /// time their `context_permille` dropped back below the threshold (or
+    /// the pane disappeared). Keeps the alert a one-shot per crossing
+    /// instead of repeating on every snapshot while context stays high.
+    context_alerted: HashSet<String>,
+    /// Budgets that already fired a `warn_at` toast, keyed by budget name,
+    /// storing the highest `warn_threshold` already alerted. Mirrors
+    /// `context_alerted`'s one-shot-per-crossing dedupe: cleared when the
+    /// budget drops back to `Ok`/`Unavailable` (or disappears), so crossing
+    /// a *higher* threshold (e.g. 70 -> 90) still re-fires.
+    budget_alerted: HashMap<String, u8>,
     pending_completions: Option<(
         Option<u64>,
         crate::protocol::endpoint::EndpointAgentCompletions,
@@ -50,6 +64,8 @@ impl EndpointAgentPresentation {
             self.acknowledged.clear();
             self.completed.clear();
             self.working.clear();
+            self.context_alerted.clear();
+            self.budget_alerted.clear();
             self.acknowledged.extend(
                 snapshot
                     .agents
@@ -67,6 +83,8 @@ impl EndpointAgentPresentation {
         self.completed
             .retain(|pane_id, _| pane_ids.contains(pane_id.as_str()));
         self.working
+            .retain(|pane_id| pane_ids.contains(pane_id.as_str()));
+        self.context_alerted
             .retain(|pane_id| pane_ids.contains(pane_id.as_str()));
         let completions = self
             .pending_completions
@@ -113,6 +131,105 @@ impl EndpointAgentPresentation {
             agent.agent_status = self.projected_status(agent);
         }
         project_aggregate_status(snapshot);
+    }
+
+    /// Returns one `SemanticNotification` per pane whose `context_permille`
+    /// just crossed `usage_config`'s `compact_at` threshold (global, or the
+    /// pane's agent-specific override — `UsageConfig::compact_at_permille_for`)
+    /// since the last snapshot, so callers can route it through the regular
+    /// notification pipeline (`ClientShellState::receive_notification`). A
+    /// pane fires at most once per crossing: it must drop back below the
+    /// threshold (or lose its usage data) before it can fire again.
+    pub(super) fn context_alerts(
+        &mut self,
+        snapshot: &ClientShellSnapshot,
+        usage_config: &UsageConfig,
+    ) -> Vec<crate::protocol::SemanticNotification> {
+        let mut alerts = Vec::new();
+        for agent in &snapshot.agents {
+            let threshold = usage_config.compact_at_permille_for(agent.agent.as_deref());
+            let permille = agent
+                .usage
+                .as_ref()
+                .and_then(|usage| usage.context_permille);
+            let Some(permille) = permille.filter(|permille| *permille >= threshold) else {
+                self.context_alerted.remove(&agent.pane_id);
+                continue;
+            };
+            if !self.context_alerted.insert(agent.pane_id.clone()) {
+                continue;
+            }
+            let exact = agent
+                .usage
+                .as_ref()
+                .is_some_and(|usage| usage.context_exact);
+            let estimate_marker = if exact { "" } else { "~" };
+            let percent = permille / 10;
+            alerts.push(crate::protocol::SemanticNotification {
+                kind: crate::protocol::SemanticNotificationKind::Custom,
+                title: format!("contexto {estimate_marker}{percent}% — considere /compact"),
+                body: None,
+                sound: None,
+                agent: agent.agent.clone(),
+                workspace_id: Some(agent.workspace_id.clone()),
+                tab_id: Some(agent.tab_id.clone()),
+                pane_id: Some(agent.pane_id.clone()),
+                position: None,
+            });
+        }
+        alerts
+    }
+
+    /// Returns one `SemanticNotification` per budget whose `warn_at` level
+    /// just crossed a *new* threshold since the last snapshot (dedup per
+    /// budget name + threshold, mirroring `context_alerts`). `on_exceed`
+    /// (`notify`/`route`/`pause`) doesn't gate this: `route`/`pause` are
+    /// no-ops until the Fase 5 router exists (see `mercury_usage::OnExceed`
+    /// and `docs/dev/usage-ui-design.md`), so every budget still at least
+    /// notifies.
+    pub(super) fn budget_alerts(
+        &mut self,
+        snapshot: &ClientShellSnapshot,
+    ) -> Vec<crate::protocol::SemanticNotification> {
+        let mut alerts = Vec::new();
+        let budgets = snapshot
+            .usage
+            .as_ref()
+            .map(|usage| usage.budgets.as_slice())
+            .unwrap_or_default();
+        let active_names: HashSet<&str> =
+            budgets.iter().map(|budget| budget.name.as_str()).collect();
+        self.budget_alerted
+            .retain(|name, _| active_names.contains(name.as_str()));
+        for budget in budgets {
+            let Some(threshold) = budget.warn_threshold.filter(|_| {
+                matches!(
+                    budget.level,
+                    ClientShellBudgetLevel::Warn | ClientShellBudgetLevel::Exceeded
+                )
+            }) else {
+                self.budget_alerted.remove(&budget.name);
+                continue;
+            };
+            if self.budget_alerted.get(&budget.name) == Some(&threshold) {
+                continue;
+            }
+            self.budget_alerted.insert(budget.name.clone(), threshold);
+            let exceeded = budget.level == ClientShellBudgetLevel::Exceeded;
+            let verb = if exceeded { "estourou" } else { "atingiu" };
+            alerts.push(crate::protocol::SemanticNotification {
+                kind: crate::protocol::SemanticNotificationKind::Custom,
+                title: format!("orçamento {}: {verb} {threshold}%", budget.name),
+                body: None,
+                sound: None,
+                agent: None,
+                workspace_id: None,
+                tab_id: None,
+                pane_id: None,
+                position: None,
+            });
+        }
+        alerts
     }
 
     pub(super) fn acknowledge_surface(
@@ -223,6 +340,7 @@ mod tests {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: true,
+            usage: None,
         }
     }
 
@@ -474,5 +592,134 @@ mod tests {
         assert!(!presentation.acknowledge_surface(&mut completed, &surface(1), Some(true)));
         assert!(!presentation.acknowledge_surface(&mut completed, &surface(2), Some(false)));
         assert_eq!(completed.agents[0].agent_status, AgentStatus::Done);
+    }
+
+    fn agent_with_context(
+        pane_id: &str,
+        permille: u16,
+        agent_name: Option<&str>,
+    ) -> ClientShellAgent {
+        let mut agent = agent(AgentStatus::Working, 1);
+        agent.pane_id = pane_id.into();
+        agent.agent = agent_name.map(str::to_string);
+        agent.usage = Some(crate::protocol::ClientShellAgentUsage {
+            model: None,
+            context_permille: Some(permille),
+            context_exact: true,
+            context_window: Some(200_000),
+            tokens_in: 0,
+            tokens_out: 0,
+            tokens_cache_read: 0,
+            tokens_cache_write: 0,
+            cost_micros_usd: None,
+            updated_at_unix_ms: None,
+        });
+        agent
+    }
+
+    #[test]
+    fn context_alert_uses_per_agent_compact_at_override() {
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            usage: UsageConfig,
+        }
+        let config = toml::from_str::<Wrapper>(
+            r#"
+            [usage]
+            compact_at = 80
+            [usage.agents.claude]
+            compact_at = 50
+            "#,
+        )
+        .unwrap()
+        .usage;
+
+        let mut with_override = EndpointAgentPresentation::default();
+        let mut snap = snapshot(AgentStatus::Working, 1, 1);
+        snap.agents = vec![agent_with_context("pane-1", 600, Some("claude"))];
+        assert_eq!(
+            with_override.context_alerts(&snap, &config).len(),
+            1,
+            "60% crosses claude's 50% override even though the global compact_at is 80%"
+        );
+
+        let mut without_override = EndpointAgentPresentation::default();
+        let mut other_agent_snap = snapshot(AgentStatus::Working, 1, 1);
+        other_agent_snap.agents = vec![agent_with_context("pane-2", 600, Some("codex"))];
+        assert!(
+            without_override
+                .context_alerts(&other_agent_snap, &config)
+                .is_empty(),
+            "60% stays under the global 80% compact_at for an agent without an override"
+        );
+    }
+
+    fn budget(
+        name: &str,
+        level: crate::protocol::ClientShellBudgetLevel,
+        warn_threshold: Option<u8>,
+    ) -> crate::protocol::ClientShellUsageBudget {
+        crate::protocol::ClientShellUsageBudget {
+            name: name.into(),
+            scope: "global".into(),
+            level,
+            used_permille: Some(750),
+            used_scaled: 750,
+            limit_scaled: 1000,
+            unit: crate::protocol::ClientShellBudgetUnit::Tokens,
+            warn_threshold,
+            resets_at_unix_ms: None,
+            forecast_exhausted_at_unix_ms: None,
+            partial: false,
+        }
+    }
+
+    fn snapshot_with_budgets(
+        budgets: Vec<crate::protocol::ClientShellUsageBudget>,
+    ) -> ClientShellSnapshot {
+        let mut snap = crate::client::shell::tests::snapshot();
+        snap.boot_id = "endpoint-boot".into();
+        snap.usage = Some(crate::protocol::ClientShellUsageSummary {
+            activity: None,
+            providers: Vec::new(),
+            budgets,
+        });
+        snap
+    }
+
+    #[test]
+    fn budget_warn_alert_fires_once_per_threshold_crossing() {
+        use crate::protocol::ClientShellBudgetLevel::{Exceeded, Ok, Warn};
+
+        let mut presentation = EndpointAgentPresentation::default();
+        let warn_70 = snapshot_with_budgets(vec![budget("claude-mensal", Warn, Some(70))]);
+        let alerts = presentation.budget_alerts(&warn_70);
+        assert_eq!(alerts.len(), 1);
+
+        // Same threshold again: no repeat.
+        assert!(presentation.budget_alerts(&warn_70).is_empty());
+
+        // Crossing a higher threshold re-fires.
+        let warn_90 = snapshot_with_budgets(vec![budget("claude-mensal", Exceeded, Some(90))]);
+        assert_eq!(presentation.budget_alerts(&warn_90).len(), 1);
+        assert!(presentation.budget_alerts(&warn_90).is_empty());
+
+        // Dropping back to Ok clears the dedupe state, so crossing 70 again re-fires.
+        let back_to_ok = snapshot_with_budgets(vec![budget("claude-mensal", Ok, None)]);
+        assert!(presentation.budget_alerts(&back_to_ok).is_empty());
+        assert_eq!(presentation.budget_alerts(&warn_70).len(), 1);
+    }
+
+    #[test]
+    fn budget_alert_dedupe_is_scoped_per_budget_name() {
+        use crate::protocol::ClientShellBudgetLevel::Warn;
+
+        let mut presentation = EndpointAgentPresentation::default();
+        let both = snapshot_with_budgets(vec![
+            budget("claude-mensal", Warn, Some(70)),
+            budget("reviewer-3h", Warn, Some(70)),
+        ]);
+        assert_eq!(presentation.budget_alerts(&both).len(), 2);
+        assert!(presentation.budget_alerts(&both).is_empty());
     }
 }

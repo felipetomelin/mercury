@@ -2,6 +2,17 @@ use crate::config::{
     AgentSidebarToken, AgentsSidebarConfig, SidebarTokenStyle, SpaceSidebarToken,
     SpacesSidebarConfig,
 };
+use crate::protocol::ClientShellAgentUsage;
+
+/// Context fill (permille, 0..=1000+) at or above which the context gauge
+/// renders red. Mirrors `compact_at` (Fase 2 passo 5 config); hardcoded here
+/// until `[usage]` lands.
+const CONTEXT_RED_AT_PERMILLE: u16 = 800;
+/// Below this fill the gauge renders green; between it and
+/// `CONTEXT_RED_AT_PERMILLE` it renders yellow.
+const CONTEXT_YELLOW_AT_PERMILLE: u16 = 600;
+/// Number of filled/empty cells in the `context` gauge bar (`▰▰▰▱▱`).
+const CONTEXT_GAUGE_CELLS: u16 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedToken {
@@ -20,8 +31,22 @@ pub(crate) enum ResolvedTokenKind {
     Agent(String),
     TerminalTitle(String),
     Branch(String),
-    GitStatus { ahead: usize, behind: usize },
+    GitStatus {
+        ahead: usize,
+        behind: usize,
+    },
     Custom(String),
+    /// `context` token: `▰▰▰▱▱ 43%`. `permille` drives both the filled-cell
+    /// count and the color threshold at render time; `exact` controls the
+    /// `~` prefix for transcript-derived estimates (see D5/D8 in
+    /// `docs/dev/usage-ui-design.md`).
+    ContextGauge {
+        permille: u16,
+        exact: bool,
+    },
+    /// Plain-text usage tokens (`context_pct`, `tokens`, `cost`, `model`):
+    /// already fully formatted, rendered like `Custom`.
+    Text(String),
 }
 
 impl ResolvedTokenKind {
@@ -35,10 +60,104 @@ impl ResolvedTokenKind {
             | Self::Agent(value)
             | Self::TerminalTitle(value)
             | Self::Branch(value)
-            | Self::Custom(value) => Some(value),
-            Self::StateIcon | Self::GitStatus { .. } => None,
+            | Self::Custom(value)
+            | Self::Text(value) => Some(value),
+            Self::StateIcon | Self::GitStatus { .. } | Self::ContextGauge { .. } => None,
         }
     }
+}
+
+/// `tokens_in/tokens_cache_read -> cache hit rate`. Cache reads are tokens
+/// that didn't need to be re-sent as fresh input, so the hit rate is the
+/// share of "would-be input" that was served from cache:
+/// `cache_read / (cache_read + tokens_in)`. `None` (segment omitted) when
+/// both are zero, since there's nothing to take a ratio of yet.
+fn cache_hit_rate_pct(tokens_in: u64, cache_read: u64) -> Option<u64> {
+    let denominator = tokens_in.checked_add(cache_read)?;
+    (denominator > 0).then(|| (cache_read.saturating_mul(100) + denominator / 2) / denominator)
+}
+
+/// Shared with the Usage view's Orçamentos section (D6/D7: token-unit budget
+/// amounts use the same humanized-count formatting as the sidebar `tokens` token).
+pub(crate) fn format_count(value: u64) -> String {
+    fn scaled(value: f64, suffix: &str) -> String {
+        let rounded = (value * 10.0).round() / 10.0;
+        if (rounded.fract()).abs() < f64::EPSILON {
+            format!("{rounded:.0}{suffix}")
+        } else {
+            format!("{rounded:.1}{suffix}")
+        }
+    }
+    if value >= 1_000_000 {
+        scaled(value as f64 / 1_000_000.0, "M")
+    } else if value >= 1_000 {
+        scaled(value as f64 / 1_000.0, "k")
+    } else {
+        value.to_string()
+    }
+}
+
+/// `↑1.2k ↓22k ⟳97%` (in, out, cache hit); shared by the sidebar `tokens`
+/// token and the Usage view's Agentes section (D6) so neither duplicates the
+/// count-humanizing/cache-hit-rate logic.
+pub(crate) fn format_tokens_token(usage: &ClientShellAgentUsage) -> String {
+    let mut text = format!(
+        "↑{} ↓{}",
+        format_count(usage.tokens_in),
+        format_count(usage.tokens_out)
+    );
+    if let Some(hit_rate) = cache_hit_rate_pct(usage.tokens_in, usage.tokens_cache_read) {
+        text.push_str(&format!(" ⟳{hit_rate}%"));
+    }
+    text
+}
+
+/// `$3.41`; shared with the Usage view's Agentes section (D6).
+pub(crate) fn format_cost_token(cost_micros_usd: u64) -> String {
+    format!("${:.2}", cost_micros_usd as f64 / 1_000_000.0)
+}
+
+/// Strips the `claude-` prefix (`opus-5.5`); shared with the Usage view's
+/// Agentes section (D6).
+pub(crate) fn format_model_token(model: &str) -> String {
+    model.strip_prefix("claude-").unwrap_or(model).to_string()
+}
+
+pub(crate) fn format_context_pct(permille: u16, exact: bool) -> String {
+    let marker = if exact { "" } else { "~" };
+    let pct = (u32::from(permille) + 5) / 10;
+    format!("{marker}{pct}%")
+}
+
+pub(crate) fn context_gauge_color(
+    permille: u16,
+    palette: &crate::app::state::Palette,
+) -> ratatui::style::Color {
+    if permille >= CONTEXT_RED_AT_PERMILLE {
+        palette.gauge_crit
+    } else if permille >= CONTEXT_YELLOW_AT_PERMILLE {
+        palette.gauge_warn
+    } else {
+        palette.gauge_ok
+    }
+}
+
+pub(crate) fn context_gauge_filled_cells(permille: u16) -> u16 {
+    let filled = (u32::from(permille) * u32::from(CONTEXT_GAUGE_CELLS) + 500) / 1000;
+    u16::try_from(filled)
+        .unwrap_or(CONTEXT_GAUGE_CELLS)
+        .min(CONTEXT_GAUGE_CELLS)
+}
+
+pub(crate) fn context_gauge_text(permille: u16, exact: bool) -> String {
+    let filled = context_gauge_filled_cells(permille);
+    let empty = CONTEXT_GAUGE_CELLS - filled;
+    format!(
+        "{}{} {}",
+        "▰".repeat(filled as usize),
+        "▱".repeat(empty as usize),
+        format_context_pct(permille, exact)
+    )
 }
 
 impl ResolvedToken {
@@ -62,6 +181,11 @@ pub(crate) struct AgentTokenContext<'a> {
     pub(crate) terminal_title_stripped: Option<&'a str>,
     pub(crate) canonical_agent: Option<crate::detect::Agent>,
     pub(crate) tokens: &'a std::collections::HashMap<String, String>,
+    /// `None` when no hook-reported session is tracked for this pane ("n/a",
+    /// never a fabricated number) — the `context`/`context_pct`/`tokens`/
+    /// `cost`/`model` tokens all resolve to `None` in that case, so rows made
+    /// only of those tokens disappear rather than showing stale/empty cells.
+    pub(crate) usage: Option<&'a ClientShellAgentUsage>,
 }
 
 pub(crate) fn agent_rows(
@@ -103,6 +227,36 @@ pub(crate) fn agent_rows(
                         AgentSidebarToken::TerminalTitleStripped => context
                             .terminal_title_stripped
                             .map(|value| ResolvedTokenKind::TerminalTitle(value.to_string())),
+                        AgentSidebarToken::Context => context.usage.and_then(|usage| {
+                            usage
+                                .context_permille
+                                .map(|permille| ResolvedTokenKind::ContextGauge {
+                                    permille,
+                                    exact: usage.context_exact,
+                                })
+                        }),
+                        AgentSidebarToken::ContextPct => context.usage.and_then(|usage| {
+                            usage.context_permille.map(|permille| {
+                                ResolvedTokenKind::Text(format_context_pct(
+                                    permille,
+                                    usage.context_exact,
+                                ))
+                            })
+                        }),
+                        AgentSidebarToken::Tokens => context
+                            .usage
+                            .map(|usage| ResolvedTokenKind::Text(format_tokens_token(usage))),
+                        AgentSidebarToken::Cost => context.usage.and_then(|usage| {
+                            usage
+                                .cost_micros_usd
+                                .map(|cost| ResolvedTokenKind::Text(format_cost_token(cost)))
+                        }),
+                        AgentSidebarToken::Model => context.usage.and_then(|usage| {
+                            usage
+                                .model
+                                .as_deref()
+                                .map(|model| ResolvedTokenKind::Text(format_model_token(model)))
+                        }),
                         AgentSidebarToken::Custom(name) => context
                             .tokens
                             .get(name)
@@ -201,6 +355,7 @@ mod tests {
         terminal_title_stripped: Option<String>,
         canonical_agent: Option<crate::detect::Agent>,
         tokens: std::collections::HashMap<String, String>,
+        usage: Option<ClientShellAgentUsage>,
     }
 
     fn entry() -> Entry {
@@ -213,6 +368,22 @@ mod tests {
             terminal_title_stripped: None,
             canonical_agent: Some(crate::detect::Agent::Pi),
             tokens: std::collections::HashMap::new(),
+            usage: None,
+        }
+    }
+
+    fn usage_fixture() -> ClientShellAgentUsage {
+        ClientShellAgentUsage {
+            model: Some("claude-opus-5.5".into()),
+            context_permille: Some(431),
+            context_exact: true,
+            context_window: Some(200_000),
+            tokens_in: 1200,
+            tokens_out: 22_000,
+            tokens_cache_read: 38_800,
+            tokens_cache_write: 0,
+            cost_micros_usd: Some(3_410_000),
+            updated_at_unix_ms: Some(0),
         }
     }
 
@@ -227,6 +398,7 @@ mod tests {
             terminal_title_stripped: entry.terminal_title_stripped.as_deref(),
             canonical_agent: entry.canonical_agent,
             tokens: &entry.tokens,
+            usage: entry.usage.as_ref(),
         }
     }
 
@@ -583,5 +755,162 @@ rows = [[{ token = "$load", rules = [{ lt = 50, hide = true }] }], ["workspace"]
                 "2 changes".into()
             ))]]
         );
+    }
+
+    #[test]
+    fn usage_tokens_resolve_from_agent_usage() {
+        let mut entry = entry();
+        entry.usage = Some(usage_fixture());
+        let config = AgentsSidebarConfig {
+            rows: vec![vec![
+                AgentSidebarToken::Model,
+                AgentSidebarToken::Context,
+                AgentSidebarToken::ContextPct,
+                AgentSidebarToken::Tokens,
+                AgentSidebarToken::Cost,
+            ]],
+            ..Default::default()
+        };
+
+        let rows = agent_rows(&config, context(&entry), "working");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0].kind, ResolvedTokenKind::Text("opus-5.5".into()));
+        assert_eq!(
+            rows[0][1].kind,
+            ResolvedTokenKind::ContextGauge {
+                permille: 431,
+                exact: true,
+            }
+        );
+        assert_eq!(rows[0][2].kind, ResolvedTokenKind::Text("43%".into()));
+        assert_eq!(
+            rows[0][3].kind,
+            ResolvedTokenKind::Text("↑1.2k ↓22k ⟳97%".into())
+        );
+        assert_eq!(rows[0][4].kind, ResolvedTokenKind::Text("$3.41".into()));
+    }
+
+    #[test]
+    fn usage_tokens_absent_without_usage_elide_the_row() {
+        let entry = entry();
+        assert_eq!(entry.usage, None);
+        let config = AgentsSidebarConfig {
+            rows: vec![
+                vec![AgentSidebarToken::Context],
+                vec![AgentSidebarToken::ContextPct],
+                vec![AgentSidebarToken::Tokens],
+                vec![AgentSidebarToken::Cost],
+                vec![AgentSidebarToken::Model],
+                vec![AgentSidebarToken::Agent],
+            ],
+            ..Default::default()
+        };
+
+        let rows = agent_rows(&config, context(&entry), "working");
+        assert_eq!(
+            rows,
+            vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Agent(
+                "pi".into()
+            ))]]
+        );
+    }
+
+    #[test]
+    fn usage_tokens_absent_per_field_elide_only_that_token() {
+        let mut entry = entry();
+        entry.usage = Some(ClientShellAgentUsage {
+            model: None,
+            context_permille: None,
+            context_exact: false,
+            context_window: None,
+            tokens_in: 0,
+            tokens_out: 0,
+            tokens_cache_read: 0,
+            tokens_cache_write: 0,
+            cost_micros_usd: None,
+            updated_at_unix_ms: None,
+        });
+        let config = AgentsSidebarConfig {
+            rows: vec![vec![
+                AgentSidebarToken::Model,
+                AgentSidebarToken::Context,
+                AgentSidebarToken::ContextPct,
+                AgentSidebarToken::Cost,
+                AgentSidebarToken::Tokens,
+            ]],
+            ..Default::default()
+        };
+
+        let rows = agent_rows(&config, context(&entry), "working");
+        // model/context/context_pct/cost all resolve to None (their field is
+        // None); `tokens` is still present because it has no optional field
+        // to be missing (all counters default to 0, which is a real value).
+        assert_eq!(
+            rows,
+            vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Text(
+                "↑0 ↓0".into()
+            ))]]
+        );
+    }
+
+    #[test]
+    fn context_gauge_renders_bar_and_estimate_marker() {
+        assert_eq!(context_gauge_text(431, true), "▰▰▱▱▱ 43%");
+        assert_eq!(context_gauge_text(431, false), "▰▰▱▱▱ ~43%");
+        assert_eq!(context_gauge_text(0, true), "▱▱▱▱▱ 0%");
+        assert_eq!(context_gauge_text(1000, true), "▰▰▰▰▰ 100%");
+        // Rounds to nearest cell/percent rather than always flooring.
+        assert_eq!(context_gauge_text(199, true), "▰▱▱▱▱ 20%");
+        assert_eq!(context_gauge_filled_cells(199), 1);
+    }
+
+    #[test]
+    fn context_gauge_color_thresholds_match_green_yellow_red() {
+        let palette = crate::app::state::Palette::catppuccin();
+        assert_eq!(context_gauge_color(0, &palette), palette.gauge_ok);
+        assert_eq!(context_gauge_color(599, &palette), palette.gauge_ok);
+        assert_eq!(context_gauge_color(600, &palette), palette.gauge_warn);
+        assert_eq!(context_gauge_color(799, &palette), palette.gauge_warn);
+        assert_eq!(context_gauge_color(800, &palette), palette.gauge_crit);
+        assert_eq!(context_gauge_color(1000, &palette), palette.gauge_crit);
+    }
+
+    #[test]
+    fn format_count_scales_and_trims_trailing_zero() {
+        assert_eq!(format_count(0), "0");
+        assert_eq!(format_count(999), "999");
+        assert_eq!(format_count(1_200), "1.2k");
+        assert_eq!(format_count(22_000), "22k");
+        assert_eq!(format_count(1_300_000), "1.3M");
+        assert_eq!(format_count(137_000), "137k");
+    }
+
+    #[test]
+    fn cache_hit_rate_uses_cache_read_over_cache_read_plus_tokens_in() {
+        assert_eq!(cache_hit_rate_pct(0, 0), None);
+        assert_eq!(cache_hit_rate_pct(100, 0), Some(0));
+        assert_eq!(cache_hit_rate_pct(0, 100), Some(100));
+        assert_eq!(cache_hit_rate_pct(3, 97), Some(97));
+    }
+
+    #[test]
+    fn model_token_strips_claude_prefix_only_when_present() {
+        let mut entry = entry();
+        let config = AgentsSidebarConfig {
+            rows: vec![vec![AgentSidebarToken::Model]],
+            ..Default::default()
+        };
+        for (model, expected) in [
+            ("claude-opus-5.5", "opus-5.5"),
+            ("gpt-5.6", "gpt-5.6"),
+            ("claude", "claude"),
+        ] {
+            entry.usage = Some(ClientShellAgentUsage {
+                model: Some(model.into()),
+                ..usage_fixture()
+            });
+            let rows = agent_rows(&config, context(&entry), "working");
+            assert_eq!(rows[0][0].kind, ResolvedTokenKind::Text(expected.into()));
+        }
     }
 }

@@ -20,10 +20,14 @@ pub const THEME_NAMES: &[&str] = &[
     "rose-pine",
     "rose-pine-dawn",
     "vesper",
+    "mercury",
+    "mercury-light",
 ];
 
 pub(crate) fn canonical_theme_name(name: &str) -> Option<&'static str> {
     match name.to_lowercase().replace([' ', '_'], "-").as_str() {
+        "mercury" | "mercury-dark" => Some("mercury"),
+        "mercury-light" => Some("mercury-light"),
         "catppuccin" | "catppuccin-mocha" => Some("catppuccin"),
         "catppuccin-latte" | "latte" | "light" => Some("catppuccin-latte"),
         "terminal" => Some("terminal"),
@@ -69,12 +73,20 @@ pub struct ThemeConfig {
     pub light_name: Option<String>,
     /// Custom overrides — applied on top of the selected base theme.
     pub custom: Option<CustomThemeColors>,
+    /// Local named themes, loaded once per config load/reload.
+    #[serde(rename = "import")]
+    pub imports: Vec<super::theme_import::ThemeImportConfig>,
 }
 
 impl ThemeConfig {
+    pub(crate) fn loaded_imports(&self) -> (Vec<(String, CustomThemeColors)>, Vec<String>) {
+        super::theme_import::load_imports(&self.imports)
+    }
+
     pub(crate) fn diagnostics(&self) -> Vec<String> {
         let valid = THEME_NAMES.join(", ");
-        [
+        let (imports, mut diagnostics) = self.loaded_imports();
+        diagnostics.extend([
             ("theme.name", self.name.as_deref(), "catppuccin"),
             ("theme.dark_name", self.dark_name.as_deref(), "catppuccin"),
             (
@@ -86,13 +98,16 @@ impl ThemeConfig {
         .into_iter()
         .filter_map(|(field, value, fallback)| {
             let value = value?;
-            canonical_theme_name(value).is_none().then(|| {
+            (canonical_theme_name(value).is_none()
+                && !imports.iter().any(|(name, _)| name == &value.to_ascii_lowercase().replace([' ', '_'], "-")))
+            .then(|| {
                 format!(
                     "unknown theme name {field} = {value:?}; using {fallback:?}; valid themes: {valid}"
                 )
             })
         })
-        .collect()
+        );
+        diagnostics
     }
 }
 
@@ -100,6 +115,9 @@ impl ThemeConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct CustomThemeColors {
+    pub gauge_ok: Option<String>,
+    pub gauge_warn: Option<String>,
+    pub gauge_crit: Option<String>,
     pub accent: Option<String>,
     pub panel_bg: Option<String>,
     pub sidebar_bg: Option<String>,
@@ -129,6 +147,9 @@ pub struct CustomThemeColors {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ModeThemeColors {
+    pub gauge_ok: Option<String>,
+    pub gauge_warn: Option<String>,
+    pub gauge_crit: Option<String>,
     pub accent: Option<String>,
     pub panel_bg: Option<String>,
     pub sidebar_bg: Option<String>,

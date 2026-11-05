@@ -58,7 +58,7 @@ impl App {
     pub(crate) fn expire_metadata_at(&mut self, deadline: Instant, now: Instant) {
         let previous_toast = self.state.toast.clone();
         for update in self.state.expire_agent_metadata_at(deadline, now) {
-            self.refresh_new_herdr_toast_context_for_update(&update, &previous_toast);
+            self.refresh_new_mercury_toast_context_for_update(&update, &previous_toast);
             self.emit_pane_state_update(&update);
         }
         let (panes, workspaces) = self.state.expire_metadata_tokens(now);
@@ -154,6 +154,10 @@ impl App {
             include_git_refresh
                 .then(|| self.git_refresh_deadline())
                 .flatten(),
+            self.usage_next_poll_deadline(),
+            self.cron_deadline(now),
+            self.cron_retry_at,
+            self.cron_learn_usage_retry_at,
             self.next_auto_update_check,
             self.next_agent_manifest_update_check,
             self.agent_metadata_deadline,

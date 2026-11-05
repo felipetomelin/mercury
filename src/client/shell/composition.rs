@@ -77,6 +77,7 @@ impl ClientShellState {
             reveal_navigation_workspace: &mut self.reveal_navigation_workspace,
             dragged_workspace_id: None,
             workspace_drop_indicator_row: None,
+            view: self.view,
         };
         if let Some(snapshot) = local_snapshot {
             render::render_sidebar(
@@ -154,6 +155,17 @@ impl ClientShellState {
     ) -> Option<crate::client::frame_output::ComposedFrame> {
         self.last_composed_at = Some(std::time::Instant::now());
         self.selection_repaint_deadline = None;
+        if self.view == ClientShellView::Usage {
+            let now = std::time::Instant::now();
+            if self
+                .usage_view_tick_deadline
+                .is_none_or(|deadline| now >= deadline)
+            {
+                self.usage_view_tick_deadline = Some(now + std::time::Duration::from_secs(1));
+            }
+        } else {
+            self.usage_view_tick_deadline = None;
+        }
         if self.last_composed_size != Some((cols, rows)) && self.mode == ClientShellMode::Navigate {
             self.reveal_navigation_workspace = true;
             self.reveal_mobile_workspace = true;
@@ -233,6 +245,7 @@ impl ClientShellState {
                 reveal_navigation_workspace: &mut self.reveal_navigation_workspace,
                 dragged_workspace_id,
                 workspace_drop_indicator_row,
+                view: self.view,
             },
         );
         self.hits.panes = surface
@@ -633,6 +646,83 @@ impl ClientShellState {
                     &self.config.palette,
                 );
             }
+            frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
+            self.hits.panes.clear();
+            self.hits.pane_splits.clear();
+            self.hits.popup = None;
+        }
+        if self.view == ClientShellView::Usage {
+            let mut composed = frame.to_ratatui_buffer()?;
+            occlusion.cover(layout.pane_surface);
+            super::usage_view::render_usage_view(
+                &mut composed,
+                layout.pane_surface,
+                snapshot,
+                &self.config,
+                &mut self.usage_view_scroll,
+                &mut self.usage_view_cursor,
+                &mut self.usage_view_reveal_cursor,
+                &mut self.hits,
+            );
+            frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
+            self.hits.panes.clear();
+            self.hits.pane_splits.clear();
+            self.hits.popup = None;
+        }
+        if self.view == ClientShellView::Crons {
+            let mut composed = frame.to_ratatui_buffer()?;
+            occlusion.cover(layout.pane_surface);
+            super::crons_view::render_crons_view(
+                &mut composed,
+                layout.pane_surface,
+                &self.config,
+                &mut self.crons_view,
+                &mut self.hits,
+            );
+            frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
+            self.hits.panes.clear();
+            self.hits.pane_splits.clear();
+            self.hits.popup = None;
+        }
+        if self.view == ClientShellView::History {
+            let mut composed = frame.to_ratatui_buffer()?;
+            occlusion.cover(layout.pane_surface);
+            super::history_view::render_history_view(
+                &mut composed,
+                layout.pane_surface,
+                &self.config,
+                &mut self.history_view,
+                &mut self.hits,
+            );
+            frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
+            self.hits.panes.clear();
+            self.hits.pane_splits.clear();
+            self.hits.popup = None;
+        }
+        if self.view == ClientShellView::Knowledge {
+            let mut composed = frame.to_ratatui_buffer()?;
+            occlusion.cover(layout.pane_surface);
+            super::knowledge_view::render(
+                &mut composed,
+                layout.pane_surface,
+                &self.config,
+                &self.knowledge_view,
+            );
+            frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
+            self.hits.panes.clear();
+            self.hits.pane_splits.clear();
+            self.hits.popup = None;
+        }
+        if self.view == ClientShellView::Learn {
+            let mut composed = frame.to_ratatui_buffer()?;
+            occlusion.cover(layout.pane_surface);
+            super::learn_view::render_learn_view(
+                &mut composed,
+                layout.pane_surface,
+                &self.config,
+                &mut self.learn_view,
+                &mut self.hits,
+            );
             frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
             self.hits.panes.clear();
             self.hits.pane_splits.clear();

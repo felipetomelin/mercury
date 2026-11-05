@@ -3,28 +3,40 @@ use serde::{Deserialize, Serialize};
 pub mod agents;
 pub mod commands;
 pub mod common;
+pub mod cron;
 pub mod events;
+pub mod history;
 pub mod integrations;
+pub mod knowledge;
+pub mod learn;
 pub mod panes;
 pub mod plugins;
 pub mod response;
+pub mod route;
 pub mod server;
 pub mod session;
 pub mod tabs;
+pub mod usage;
 pub mod workspaces;
 pub mod worktrees;
 
 pub use agents::*;
 pub use commands::*;
 pub use common::*;
+pub use cron::*;
 pub use events::*;
+pub use history::*;
 pub use integrations::*;
+pub use knowledge::*;
+pub use learn::*;
 pub use panes::*;
 pub use plugins::*;
 pub use response::*;
+pub use route::*;
 pub use server::*;
 pub use session::*;
 pub use tabs::*;
+pub use usage::*;
 pub use workspaces::*;
 pub use worktrees::*;
 
@@ -205,6 +217,22 @@ pub enum Method {
     PaneReportAgent(PaneReportAgentParams),
     #[serde(rename = "pane.report_agent_session")]
     PaneReportAgentSession(PaneReportAgentSessionParams),
+    #[serde(rename = "learn.claude_session_end")]
+    LearnClaudeSessionEnd(LearnClaudeSessionEndParams),
+    #[serde(rename = "learn.claude_turn_end")]
+    LearnClaudeTurnEnd(LearnClaudeSessionEndParams),
+    #[serde(rename = "learn.list")]
+    LearnList(LearnListParams),
+    #[serde(rename = "learn.status")]
+    LearnStatus(EmptyParams),
+    #[serde(rename = "learn.show")]
+    LearnShow(LearnChangeTarget),
+    #[serde(rename = "learn.diff")]
+    LearnDiff(LearnChangeTarget),
+    #[serde(rename = "learn.undo")]
+    LearnUndo(LearnChangeTarget),
+    #[serde(rename = "learn.undo_date")]
+    LearnUndoDate(LearnUndoDateParams),
     #[serde(rename = "pane.report_metadata")]
     PaneReportMetadata(PaneReportMetadataParams),
     #[serde(rename = "pane.clear_agent_authority")]
@@ -213,6 +241,40 @@ pub enum Method {
     PaneReleaseAgent(PaneReleaseAgentParams),
     #[serde(rename = "pane.close")]
     PaneClose(PaneTarget),
+    #[serde(rename = "usage.report_statusline")]
+    UsageReportStatusline(UsageReportStatuslineParams),
+    #[serde(rename = "usage.refresh")]
+    UsageRefresh(EmptyParams),
+    #[serde(rename = "route.preview")]
+    RoutePreview(RoutePreviewParams),
+    #[serde(rename = "knowledge.request")]
+    Knowledge(KnowledgeParams),
+    #[serde(rename = "history.search")]
+    HistorySearch(HistorySearchParams),
+    #[serde(rename = "history.resolve")]
+    HistoryResolve(HistoryResolveParams),
+    #[serde(rename = "cron.add")]
+    CronAdd(CronAddParams),
+    #[serde(rename = "cron.preview")]
+    CronPreview(CronPreviewParams),
+    #[serde(rename = "cron.list")]
+    CronList(EmptyParams),
+    #[serde(rename = "cron.get")]
+    CronGet(CronJobTarget),
+    #[serde(rename = "cron.edit")]
+    CronEdit(CronEditParams),
+    #[serde(rename = "cron.pause")]
+    CronPause(CronPauseParams),
+    #[serde(rename = "cron.run")]
+    CronRun(CronJobTarget),
+    #[serde(rename = "cron.rm")]
+    CronRemove(CronJobTarget),
+    #[serde(rename = "cron.runs")]
+    CronRuns(CronRunsParams),
+    #[serde(rename = "cron.log")]
+    CronLog(CronLogParams),
+    #[serde(rename = "cron.doctor")]
+    CronDoctor(EmptyParams),
     #[serde(rename = "popup.close")]
     PopupClose(EmptyParams),
     #[serde(rename = "events.subscribe")]

@@ -1,7 +1,7 @@
 //! Thin client mode — connects to the server's client socket.
 //!
 //! The client:
-//! - Connects to `herdr-client.sock`, sends TerminalHello with terminal size and protocol version
+//! - Connects to `mercury-client.sock`, sends TerminalHello with terminal size and protocol version
 //! - Sets up the real terminal (raw mode, mouse capture, keyboard enhancements)
 //! - Receives Frame messages and blits them to the terminal (diff against last frame)
 //! - Reads stdin events (keystrokes, mouse, paste) and sends them as ClientMessage::Input
@@ -303,7 +303,7 @@ fn run_client_with_mode(
         setup_terminal(mouse_capture)
     }
     .map_err(|err| {
-        eprintln!("herdr: failed to set up terminal: {err}");
+        eprintln!("mercury: failed to set up terminal: {err}");
         err
     })?;
     loop_config.host_escape_disambiguation_active =
@@ -356,7 +356,7 @@ fn run_client_with_mode(
     let terminal_restore_failed = terminal_guard.restore().is_err();
 
     if let Err(err) = result {
-        let _ = writeln!(io::stderr(), "herdr: {err}");
+        let _ = writeln!(io::stderr(), "mercury: {err}");
         rt.shutdown_timeout(Duration::from_millis(100));
         crate::logging::shutdown("client");
 
@@ -2234,6 +2234,11 @@ async fn run_client_loop(
                     let (effects, outcome, frame) = {
                         let shell = state.shell.as_mut().expect("checked shell mode");
                         let mut outcome = shell.tick_selection_autoscroll(now);
+                        let usage_refresh = shell.tick_account_usage(now);
+                        outcome.actions.extend(usage_refresh.actions);
+                        let history_retry = shell.tick_history_resume(now);
+                        outcome.repaint |= history_retry.repaint;
+                        outcome.actions.extend(history_retry.actions);
                         for expired in expired_endpoints {
                             if !shell.endpoint_is_active(&expired.endpoint_id) {
                                 continue;

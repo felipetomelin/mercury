@@ -1,9 +1,9 @@
-//! Headless server mode — runs the herdr event loop without a real terminal.
+//! Headless server mode — runs the mercury event loop without a real terminal.
 //!
 //! The server:
 //! - Does not enter raw mode or read stdin
-//! - Creates and listens on both `herdr.sock` (existing JSON API) and
-//!   `herdr-client.sock` (new binary protocol)
+//! - Creates and listens on both `mercury.sock` (existing JSON API) and
+//!   `mercury-client.sock` (new binary protocol)
 //! - Initializes AppState and all PTYs from session restore or fresh state
 //! - Runs the main event loop (drain events, drain API requests, scheduled tasks)
 //! - Renders to a virtual ratatui Buffer in memory
@@ -75,6 +75,9 @@ use crate::server::terminal_attach::paste_payload_for_runtime;
 mod bootstrap;
 mod client_views;
 mod endpoint_requests;
+mod history;
+mod knowledge;
+mod learn;
 mod lifecycle;
 mod native_graphics;
 mod notifications;
@@ -182,7 +185,7 @@ enum AltScreenReadConflict {
     Defer,
 }
 
-/// The headless server — runs the herdr event loop without a real terminal.
+/// The headless server — runs the mercury event loop without a real terminal.
 pub struct HeadlessServer {
     app: app::App,
     #[cfg(unix)]
@@ -1409,7 +1412,7 @@ impl HeadlessServer {
 
     /// Renders `ui.window_title` against the foreground client view. `None` means
     /// window titles are disabled or every token resolved empty, which leaves
-    /// the client on Herdr's default title.
+    /// the client on Mercury's default title.
     fn configured_window_title(&self) -> Option<String> {
         self.foreground_window_title_target()
             .map_or_else(
@@ -1423,7 +1426,7 @@ impl HeadlessServer {
     }
 
     /// Pushes the configured outer window title to the foreground client when it
-    /// changed. Herdr consumes each pane's own `OSC 0`/`OSC 2`, so without this
+    /// changed. Mercury consumes each pane's own `OSC 0`/`OSC 2`, so without this
     /// the host terminal title never follows the session — which is what window
     /// managers read for tab and group bar labels.
     fn sync_window_title(&mut self) {
@@ -1491,7 +1494,7 @@ impl HeadlessServer {
         };
         let set_title = title.is_some();
         // An explicit title suppresses `ui.window_title` until it is cleared,
-        // and clearing restores the configured title rather than only "herdr".
+        // and clearing restores the configured title rather than only "mercury".
         self.api_window_title = title.clone();
         let title = title.or_else(|| self.configured_window_title());
         let changed = self.send_window_title(title);
@@ -2061,7 +2064,8 @@ impl HeadlessServer {
                 size,
                 max,
             } => {
-                let detail = format!("Input message is {size} bytes; Herdr's limit is {max} bytes");
+                let detail =
+                    format!("Input message is {size} bytes; Mercury's limit is {max} bytes");
                 let message = if matches!(
                     self.clients.get(&client_id).map(|client| &client.mode),
                     Some(ClientConnectionMode::ClientShell)
@@ -2963,6 +2967,40 @@ impl HeadlessServer {
                 .handle_deferred_agent_api_request(msg.request, msg.respond_to);
             return changed | deferred_changed;
         }
+        if matches!(&msg.request.method, api::schema::Method::RoutePreview(_)) {
+            self.app
+                .handle_deferred_route_api_request(msg.request, msg.respond_to);
+            return changed;
+        }
+        if matches!(&msg.request.method, api::schema::Method::Knowledge(_)) {
+            knowledge::dispatch(
+                msg.request,
+                msg.respond_to,
+                self.app.knowledge_config.clone(),
+                self.app.route.clone(),
+                self.app.usage.route_limits(),
+            );
+            return changed;
+        }
+        if matches!(
+            &msg.request.method,
+            api::schema::Method::HistorySearch(_) | api::schema::Method::HistoryResolve(_)
+        ) {
+            history::dispatch(msg.request, msg.respond_to);
+            return changed;
+        }
+        if matches!(
+            &msg.request.method,
+            api::schema::Method::LearnList(_)
+                | api::schema::Method::LearnStatus(_)
+                | api::schema::Method::LearnShow(_)
+                | api::schema::Method::LearnDiff(_)
+                | api::schema::Method::LearnUndo(_)
+                | api::schema::Method::LearnUndoDate(_)
+        ) {
+            learn::dispatch(msg.request, msg.respond_to, self.app.event_tx.clone());
+            return changed;
+        }
         if matches!(
             &msg.request.method,
             api::schema::Method::WorktreeCreate(_)
@@ -3047,7 +3085,7 @@ impl HeadlessServer {
         let _ = msg.respond_to.send(response);
 
         // Forward new toast state only when a client-local delivery mode is selected.
-        // Herdr delivery renders the toast in-frame and must not ask clients to
+        // Mercury delivery renders the toast in-frame and must not ask clients to
         // show a terminal or system notification.
         let toast_after = self.app.state.toast.clone();
         let forwarded_toast_from_state = if should_forward_toast_to_clients(
@@ -3242,6 +3280,11 @@ impl HeadlessServer {
         if self.has_app_client() {
             self.app.start_git_status_refresh_if_due(now);
         }
+
+        self.app.start_usage_history_scan_if_needed();
+        self.app.start_usage_refresh_if_due(now);
+        self.app.start_codex_usage_refresh_if_due(now);
+        changed |= self.app.start_cron_due();
 
         if self
             .app

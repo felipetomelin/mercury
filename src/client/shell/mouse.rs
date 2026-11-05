@@ -1882,6 +1882,41 @@ impl ClientShellState {
                     outcome.repaint = true;
                 }
             }
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                if self.view == ClientShellView::Crons
+                    && self
+                        .hits
+                        .crons_rows
+                        .iter()
+                        .any(|(rect, _)| point.0 >= rect.x && point.1 >= rect.y) =>
+            {
+                let key = crate::input::TerminalKey::new(
+                    if mouse.kind == MouseEventKind::ScrollUp {
+                        KeyCode::Up
+                    } else {
+                        KeyCode::Down
+                    },
+                    crossterm::event::KeyModifiers::empty(),
+                );
+                self.handle_crons_view_key(&key, outcome);
+            }
+            MouseEventKind::ScrollUp if super::contains(self.hits.usage_body, point) => {
+                let next = self.usage_view_scroll.saturating_sub(1);
+                if next != self.usage_view_scroll {
+                    self.usage_view_scroll = next;
+                    outcome.repaint = true;
+                }
+            }
+            MouseEventKind::ScrollDown if super::contains(self.hits.usage_body, point) => {
+                let next = self
+                    .usage_view_scroll
+                    .saturating_add(1)
+                    .min(self.hits.usage_max_scroll);
+                if next != self.usage_view_scroll {
+                    self.usage_view_scroll = next;
+                    outcome.repaint = true;
+                }
+            }
             MouseEventKind::ScrollUp if super::contains(self.hits.workspace_body, point) => {
                 let next = self.workspace_scroll.saturating_sub(1);
                 if next != self.workspace_scroll {
@@ -2058,6 +2093,104 @@ impl ClientShellState {
                     outcome.resize = true;
                     self.persist_chrome_preferences(outcome);
                     return;
+                }
+                if super::contains(self.hits.usage_chip, point) {
+                    self.toggle_usage_view(outcome);
+                    return;
+                }
+                if super::contains(self.hits.crons_chip, point) {
+                    self.toggle_crons_view(outcome);
+                    return;
+                }
+                if super::contains(self.hits.history_chip, point) {
+                    self.toggle_history_view(outcome);
+                    return;
+                }
+                if super::contains(self.hits.knowledge_chip, point) {
+                    self.toggle_knowledge_view(outcome);
+                    return;
+                }
+                if super::contains(self.hits.learn_chip, point) {
+                    self.toggle_learn_view(outcome);
+                    return;
+                }
+                if self.view == ClientShellView::Learn {
+                    if let Some(index) = self
+                        .hits
+                        .learn_rows
+                        .iter()
+                        .find(|(rect, _)| super::contains(*rect, point))
+                        .map(|(_, index)| *index)
+                    {
+                        self.learn_view.selected = index;
+                        self.open_selected_learn(outcome);
+                        return;
+                    }
+                }
+                if self.view == ClientShellView::History {
+                    if let Some(index) = self
+                        .hits
+                        .history_rows
+                        .iter()
+                        .find(|(rect, _)| super::contains(*rect, point))
+                        .map(|(_, index)| *index)
+                    {
+                        self.history_view.selected = index;
+                        outcome.repaint = true;
+                        return;
+                    }
+                }
+                if self.view == ClientShellView::Crons {
+                    if let Some(key) = self
+                        .hits
+                        .cron_controls
+                        .iter()
+                        .find(|(rect, _)| super::contains(*rect, point))
+                        .map(|(_, k)| *k)
+                    {
+                        let key = crate::input::TerminalKey::new(
+                            KeyCode::Char(key),
+                            crossterm::event::KeyModifiers::empty(),
+                        );
+                        self.handle_crons_view_key(&key, outcome);
+                        return;
+                    }
+                    if let Some(index) = self
+                        .hits
+                        .crons_rows
+                        .iter()
+                        .find(|(rect, _)| super::contains(*rect, point))
+                        .map(|(_, index)| *index)
+                    {
+                        if self.crons_view.form.is_some() {
+                            self.click_cron_form(index, outcome);
+                            return;
+                        }
+                        match self.crons_view.page {
+                            CronsPage::Jobs => {
+                                self.crons_view.selected_job = index;
+                                self.open_selected_runs(outcome);
+                            }
+                            CronsPage::Runs => {
+                                self.crons_view.selected_run = index;
+                                self.open_selected_log(outcome);
+                            }
+                            CronsPage::Log => {}
+                        }
+                        return;
+                    }
+                }
+                if self.view == ClientShellView::Usage {
+                    let usage_row_pane_id = self
+                        .hits
+                        .usage_rows
+                        .iter()
+                        .find(|(rect, _)| super::contains(*rect, point))
+                        .map(|(_, pane_id)| pane_id.clone());
+                    if let Some(pane_id) = usage_row_pane_id {
+                        self.focus_usage_row_pane(pane_id, outcome);
+                        return;
+                    }
                 }
                 let group_toggle = self.hits.workspaces.iter().find_map(|hit| {
                     let (rect, key) = hit.group_toggle.as_ref()?;

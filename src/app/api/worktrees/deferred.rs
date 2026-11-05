@@ -246,7 +246,7 @@ impl App {
                 encode_error(
                     id,
                     "not_linked_worktree",
-                    "workspace is not a Herdr-managed worktree checkout",
+                    "workspace is not a Mercury-managed worktree checkout",
                 ),
             );
             return;

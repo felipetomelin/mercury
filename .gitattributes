@@ -1,1 +1,5 @@
 * text=auto eol=lf
+
+# Preserve the exact upstream bytes checked by the pinned ConPTY notice hashes.
+packaging/windows/licenses/Microsoft.Windows.Console.ConPTY-LICENSE.txt -text whitespace=cr-at-eol
+packaging/windows/licenses/Microsoft.Windows.Console.ConPTY-NOTICE.md -text whitespace=cr-at-eol

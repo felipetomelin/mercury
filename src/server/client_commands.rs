@@ -13,11 +13,30 @@ pub(crate) const MAX_ENDPOINT_REQUEST_ID_BYTES: usize = 128;
 const ENDPOINT_RESPONSE_CHUNK_BYTES: usize = 512 * 1024;
 
 const CLIENT_SHELL_METHODS: &[&str] = &[
+    "agent.start",
     "client_shell.surface.set",
     "command.invoke",
+    "cron.add",
+    "cron.edit",
+    "cron.get",
+    "cron.list",
+    "cron.log",
+    "cron.pause",
+    "cron.preview",
+    "cron.rm",
+    "cron.run",
+    "cron.runs",
+    "history.resolve",
+    "history.search",
     "integration.install",
     "integration.list",
+    "knowledge.request",
     "layout.set_split_ratio",
+    "learn.diff",
+    "learn.list",
+    "learn.show",
+    "learn.status",
+    "learn.undo",
     "pane.clear",
     "pane.close",
     "pane.copy_motion",
@@ -43,6 +62,7 @@ const CLIENT_SHELL_METHODS: &[&str] = &[
     "tab.focus",
     "tab.move",
     "tab.rename",
+    "usage.refresh",
     "workspace.close",
     "workspace.create",
     "workspace.focus",
@@ -141,7 +161,7 @@ pub(crate) fn spawn_response_waiter(
     server_event_tx: tokio_mpsc::Sender<ServerEvent>,
 ) -> io::Result<()> {
     std::thread::Builder::new()
-        .name("herdr-client-endpoint-response".into())
+        .name("mercury-client-endpoint-response".into())
         .spawn(move || {
             let response = response_rx.recv().unwrap_or_else(|_| {
                 error_response(
@@ -289,6 +309,22 @@ mod tests {
         .expect("endpoint method shape fixture");
         let mut actual = endpoint_method_shape_digests();
         // Freeze additive methods separately without rewriting the published fixture.
+        for (method, digest) in [
+            (
+                "cron.preview",
+                "49a538d76577d99c566d1ee9c2323ad2162ea50199debf757fcc64615c96ef03",
+            ),
+            (
+                "cron.rm",
+                "72a0d42d94c1cdbdbba2d1bcc97f5e85dded134974fa7bf3d08ca14e17f9ec9d",
+            ),
+            (
+                "usage.refresh",
+                "26e54fee93b05af5f0ea28b9aed51cbbc3311eb24170316e7b5fe48e257f330a",
+            ),
+        ] {
+            assert_eq!(actual.remove(method).as_deref(), Some(digest));
+        }
         assert_eq!(
             actual.remove("pane.clear").as_deref(),
             Some("0301d288ba198ddaa427dd7421c71911cccaf4ea03544531efa8b67ca21b08f6")
@@ -297,6 +333,81 @@ mod tests {
             actual.remove("pane.link.resolve").as_deref(),
             Some("f5e4a3e01453ae7b188f127ce951c12c20e0bebcc17cc364eeb6d1a01fd5bf81")
         );
+        // cron.add/edit changed only after the requested removal of the Email
+        // delivery variant from the shared CronJobDefinition schema. The five
+        // Learn digests below freeze newly advertised TUI methods.
+        for (method, digest) in [
+            (
+                "knowledge.request",
+                "adb26e303a250e638ed420d1e24f101c7ba28623910b15a4c0cd11fc412080c5",
+            ),
+            (
+                "agent.start",
+                "2c70813601c631682efb857fe6286384ba1d6ddafbbb8d420ad6e548522c74a7",
+            ),
+            (
+                "cron.add",
+                "fb27902a1d75e64391544cc4aae6432122534007945d0992df52f65da719e9ee",
+            ),
+            (
+                "cron.edit",
+                "1bd5678f246e5ca787cfc93a5186f7c6dadc22821f333d0a7d189c18d7e582ab",
+            ),
+            (
+                "cron.get",
+                "6b965b8b06503693b2bd6b9feb45d5e71d75c30a8c19cd07378f6c7b95b75504",
+            ),
+            (
+                "cron.list",
+                "6cce49656f8e88e1f4b211025395f54b1c4542e0d38ec84e83079e12df564f0f",
+            ),
+            (
+                "cron.log",
+                "beddb3fbee5d38d956e49de43c243fc01180a9caae840f3328de1b51ad68a117",
+            ),
+            (
+                "cron.pause",
+                "f0c687e7de5e32b88814e70ea5d43604b44fb7c2c9c82a5c25998856fbe2d5d2",
+            ),
+            (
+                "cron.run",
+                "e58884920d270bb23728351574218098b6f18a47da0f7f1a2a7ff1e4d466374d",
+            ),
+            (
+                "cron.runs",
+                "ed8d5ace02177826e047b7d28e862aba8fc8891a13b07c8d7a7b4d2fa7099345",
+            ),
+            (
+                "history.resolve",
+                "13be52f65d43780f8a5f3427cb7757ab020990e0074bf5cfcd37adbb2226c384",
+            ),
+            (
+                "history.search",
+                "7b0b5b86a1ef328a8b9d0edd7aa3dec3dd42216456ec996f452771f972fe4077",
+            ),
+            (
+                "learn.diff",
+                "dfd1bce9eb6b446a0dd1d28ea2ff4eb7559ed637b784388c2b781a814a211f29",
+            ),
+            (
+                "learn.list",
+                "9ad98546df32f74743013cfd4441fbe8e28ea4b8374539144afc8eb28f3c3fd3",
+            ),
+            (
+                "learn.show",
+                "67be358e0f5fa5c548e9cf2446b164ffd864430cd7af58ec1cbdab1dd48006d2",
+            ),
+            (
+                "learn.status",
+                "c86d469860a0322184c9112c2ab1b06545fb22240b962a8c4e1dc793d251d2c4",
+            ),
+            (
+                "learn.undo",
+                "8e7e91ae3be426a0ca44b9b7f34c1dbacf9c63e1b7aa9c4706bfc5c0fad5383f",
+            ),
+        ] {
+            assert_eq!(actual.remove(method).as_deref(), Some(digest), "{method}");
+        }
 
         assert_eq!(
             actual, expected,
@@ -342,6 +453,44 @@ mod tests {
                 schema_methods.iter().any(|candidate| candidate == method),
                 "advertised endpoint method {method:?} is absent from the request schema"
             );
+        }
+    }
+
+    #[test]
+    fn cron_tab_methods_are_advertised_to_the_client_shell() {
+        for method in [
+            "cron.add",
+            "cron.edit",
+            "cron.get",
+            "cron.list",
+            "cron.log",
+            "cron.pause",
+            "cron.preview",
+            "cron.rm",
+            "cron.run",
+            "cron.runs",
+        ] {
+            assert!(supports_client_shell_method_name(method), "{method}");
+        }
+    }
+
+    #[test]
+    fn learn_tab_methods_are_advertised_without_exposing_hook_or_date_methods() {
+        for method in [
+            "learn.diff",
+            "learn.list",
+            "learn.show",
+            "learn.status",
+            "learn.undo",
+        ] {
+            assert!(supports_client_shell_method_name(method), "{method}");
+        }
+        for method in [
+            "learn.claude_session_end",
+            "learn.claude_turn_end",
+            "learn.undo_date",
+        ] {
+            assert!(!supports_client_shell_method_name(method), "{method}");
         }
     }
 

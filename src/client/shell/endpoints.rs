@@ -39,6 +39,11 @@ pub(crate) enum ClientEndpointFocusTarget {
 }
 
 impl ClientShellState {
+    fn discard_cron_overlay(&mut self) {
+        self.crons_view.form = None;
+        self.crons_view.deleting = None;
+    }
+
     pub(crate) fn set_endpoint_catalog(&mut self, profiles: &[SavedSshEndpoint]) {
         let mut next = Vec::with_capacity(profiles.len().saturating_add(1));
         let local = self
@@ -101,6 +106,20 @@ impl ClientShellState {
 
     pub(crate) fn select_unavailable_local(&mut self) {
         self.reset_endpoint_projection();
+        self.crons_view = CronsViewState::default();
+        self.history_view = HistoryViewState::default();
+        self.learn_view = LearnViewState::default();
+        self.history_resume_retry = None;
+        self.discard_cron_overlay();
+        if matches!(
+            self.view,
+            ClientShellView::Crons
+                | ClientShellView::History
+                | ClientShellView::Learn
+                | ClientShellView::Knowledge
+        ) {
+            self.view = ClientShellView::Terminal;
+        }
         self.active_endpoint_id = ClientEndpointId::Local;
         self.mode = ClientShellMode::Terminal;
         self.snapshot = None;
@@ -231,6 +250,21 @@ impl ClientShellState {
         let agent_scroll = self.agent_scroll;
         if switching_endpoint {
             self.active_endpoint_id = endpoint_id.clone();
+            self.crons_view = CronsViewState::default();
+            self.history_view = HistoryViewState::default();
+            self.learn_view = LearnViewState::default();
+            self.knowledge_view = super::knowledge_view::KnowledgeViewState::default();
+            self.history_resume_retry = None;
+            self.discard_cron_overlay();
+            if matches!(
+                self.view,
+                ClientShellView::Crons
+                    | ClientShellView::History
+                    | ClientShellView::Learn
+                    | ClientShellView::Knowledge
+            ) {
+                self.view = ClientShellView::Terminal;
+            }
             self.pane_surface = None;
             self.pending_pane_surface = None;
         }
@@ -572,6 +606,13 @@ impl ClientShellState {
         self.endpoints[index]
             .agent_presentation
             .project_snapshot_for_generation(&mut snapshot, generation);
+        let usage_config = self.config.usage.clone();
+        let context_alerts = self.endpoints[index]
+            .agent_presentation
+            .context_alerts(&snapshot, &usage_config);
+        let budget_alerts = self.endpoints[index]
+            .agent_presentation
+            .budget_alerts(&snapshot);
         let presented_surface = if acknowledge_surface && endpoint_id == &self.active_endpoint_id {
             self.pane_surface.as_ref()
         } else {
@@ -644,6 +685,12 @@ impl ClientShellState {
                 })
             {
                 endpoint.agent_view_projection = None;
+            }
+        }
+        if !context_alerts.is_empty() || !budget_alerts.is_empty() {
+            let now = std::time::Instant::now();
+            for event in context_alerts.into_iter().chain(budget_alerts) {
+                self.receive_notification(endpoint_id, event, now);
             }
         }
     }

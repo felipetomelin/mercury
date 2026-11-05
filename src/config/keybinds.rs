@@ -336,7 +336,7 @@ pub struct CustomCommandKeybind {
     pub height: Option<PopupSize>,
 }
 
-/// Parsed keybinds for Herdr actions.
+/// Parsed keybinds for Mercury actions.
 #[derive(Debug, Clone)]
 pub struct NavigateKeybinds {
     pub workspace_up: ActionKeybinds,
@@ -347,7 +347,7 @@ pub struct NavigateKeybinds {
     pub pane_right: ActionKeybinds,
 }
 
-/// Parsed keybinds for Herdr actions.
+/// Parsed keybinds for Mercury actions.
 #[derive(Debug, Clone)]
 pub struct Keybinds {
     pub navigate: NavigateKeybinds,
@@ -403,6 +403,9 @@ pub struct Keybinds {
     pub resize_pane_up: ActionKeybinds,
     pub resize_pane_right: ActionKeybinds,
     pub toggle_sidebar: ActionKeybinds,
+    pub usage: ActionKeybinds,
+    pub crons: ActionKeybinds,
+    pub learn: ActionKeybinds,
     pub custom_commands: Vec<CustomCommandKeybind>,
 }
 
@@ -586,6 +589,9 @@ impl Config {
             resize_pane_up: empty_action!(),
             resize_pane_right: empty_action!(),
             toggle_sidebar: empty_action!(),
+            usage: empty_action!(),
+            crons: empty_action!(),
+            learn: empty_action!(),
             custom_commands: Vec::new(),
         };
 
@@ -734,6 +740,9 @@ impl Config {
             apply_action!(keybinds.resize_pane_up, resize_pane_up, source);
             apply_action!(keybinds.resize_pane_right, resize_pane_right, source);
             apply_action!(keybinds.toggle_sidebar, toggle_sidebar, source);
+            apply_action!(keybinds.usage, usage, source);
+            apply_action!(keybinds.crons, crons, source);
+            apply_action!(keybinds.learn, learn, source);
 
             if source == field_source!(indexed) {
                 append_legacy_indexed_bindings(

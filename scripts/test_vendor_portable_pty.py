@@ -29,8 +29,20 @@ class VendorPortablePtyTests(unittest.TestCase):
 
     def test_cargo_metadata_resolves_portable_pty_to_vendored_tree(self) -> None:
         project_root = Path(__file__).resolve().parent.parent
+        rustc = subprocess.run(
+            ["rustc", "-vV"], text=True, capture_output=True, check=True
+        )
+        host_line = next(
+            (line for line in rustc.stdout.splitlines() if line.startswith("host: ")),
+            None,
+        )
+        self.assertIsNotNone(host_line, f"rustc did not report a host:\n{rustc.stdout}")
+        host = host_line[len("host: "):]
         result = subprocess.run(
-            ["cargo", "metadata", "--locked", "--format-version", "1"],
+            [
+                "cargo", "metadata", "--offline", "--locked", "--format-version", "1",
+                "--filter-platform", host,
+            ],
             cwd=project_root,
             text=True,
             capture_output=True,
@@ -115,7 +127,7 @@ class VendorPortablePtyTests(unittest.TestCase):
         self.assertIn("LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR", text)
         self.assertIn("LOAD_LIBRARY_SEARCH_SYSTEM32", text)
         self.assertIn("GetModuleHandleW", text)
-        self.assertIn("HERDR_WINDOWS_CONPTY", text)
+        self.assertIn("MERCURY_WINDOWS_CONPTY", text)
         self.assertIn("Sha256::new()", text)
         self.assertNotIn('Path::new("conpty.dll")', text)
         self.assertNotIn("shared_library", text)

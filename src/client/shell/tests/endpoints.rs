@@ -37,6 +37,7 @@ fn agent(
         state_labels: Vec::new(),
         tokens: Vec::new(),
         focused: true,
+        usage: None,
     }
 }
 
@@ -99,7 +100,7 @@ fn machine_diagnostic_badge_reopens_notice_without_collapsing_machine() {
         assert!(notice.body.contains("Permission denied"));
         assert!(notice
             .title
-            .contains("herdr machine reconnect 0123456789abcdef0123456789abcdef"));
+            .contains("mercury machine reconnect 0123456789abcdef0123456789abcdef"));
     }
     state.set_endpoint_status(&id, ClientEndpointStatus::Online);
     state.compose(120, 40).unwrap();
@@ -2590,4 +2591,155 @@ fn navigator_foreign_workspace_heading_keeps_the_workspace_target() {
             target: Some(ClientEndpointFocusTarget::Workspace(workspace_id)),
         }] if activated == &endpoint_id && workspace_id == "ws_1"
     ));
+}
+
+fn usage_with_context_permille(permille: u16) -> crate::protocol::ClientShellAgentUsage {
+    crate::protocol::ClientShellAgentUsage {
+        model: Some("claude-opus-5.5".into()),
+        context_permille: Some(permille),
+        context_exact: true,
+        context_window: Some(200_000),
+        tokens_in: 0,
+        tokens_out: 0,
+        tokens_cache_read: 0,
+        tokens_cache_write: 0,
+        cost_micros_usd: None,
+        updated_at_unix_ms: None,
+    }
+}
+
+#[test]
+fn context_crossing_80_percent_fires_a_toast_once_until_it_drops_and_recrosses() {
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.toast_delivery = crate::config::ToastDelivery::Mercury;
+    let mut state = ClientShellState::new(config);
+
+    // Toasts for the currently focused tab are suppressed by the shared
+    // Mercury-delivery path (the user is already looking at it), so point the
+    // alerted agent at a tab other than the snapshot's focused one to
+    // exercise the actual toast delivery.
+    let mut below = snapshot();
+    below.focused_tab_id = Some("other-tab".into());
+    below.revision = 1;
+    below.agents = vec![agent("pi", AgentStatus::Working, 1)];
+    below.agents[0].usage = Some(usage_with_context_permille(700));
+    state.set_snapshot(Box::new(below));
+    assert!(
+        state.visible_notification.is_none(),
+        "no toast below the threshold"
+    );
+
+    let mut crossed = snapshot();
+    crossed.focused_tab_id = Some("other-tab".into());
+    crossed.revision = 2;
+    crossed.agents = vec![agent("pi", AgentStatus::Working, 1)];
+    crossed.agents[0].usage = Some(usage_with_context_permille(824));
+    state.set_snapshot(Box::new(crossed.clone()));
+    let toast = state
+        .visible_notification
+        .as_ref()
+        .expect("toast on crossing 80%");
+    assert_eq!(toast.event.title, "contexto 82% — considere /compact");
+    assert_eq!(toast.event.pane_id.as_deref(), Some("pane_1"));
+    assert_eq!(toast.event.kind, SemanticNotificationKind::Custom);
+
+    // Simulate the toast having been dismissed/expired; context is still
+    // high on the next snapshot, so it must not re-fire.
+    state.visible_notification = None;
+    let mut still_high = crossed.clone();
+    still_high.revision = 3;
+    still_high.agents[0].usage = Some(usage_with_context_permille(900));
+    state.set_snapshot(Box::new(still_high));
+    assert!(
+        state.visible_notification.is_none(),
+        "must not repeat while context stays above the threshold"
+    );
+
+    // Dropping back below the threshold clears the dedupe...
+    let mut dropped = crossed.clone();
+    dropped.revision = 4;
+    dropped.agents[0].usage = Some(usage_with_context_permille(500));
+    state.set_snapshot(Box::new(dropped));
+    assert!(state.visible_notification.is_none());
+
+    // ...so crossing again fires a new toast.
+    let mut crossed_again = crossed.clone();
+    crossed_again.revision = 5;
+    crossed_again.agents[0].usage = Some(usage_with_context_permille(810));
+    state.set_snapshot(Box::new(crossed_again));
+    assert!(
+        state.visible_notification.is_some(),
+        "crossing the threshold again after dropping below it should re-fire"
+    );
+}
+
+#[test]
+fn sidebar_usage_row_renders_gauge_tokens_cost_and_model_only_when_usage_is_present() {
+    let mut config = Config::default();
+    config.ui.sidebar.agents.rows = vec![vec![
+        crate::config::AgentSidebarToken::Model,
+        crate::config::AgentSidebarToken::Context,
+        crate::config::AgentSidebarToken::Cost,
+    ]];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+
+    let mut no_usage = snapshot();
+    no_usage.agents = vec![agent("pi", AgentStatus::Working, 1)];
+    state.set_snapshot(Box::new(no_usage));
+    state.set_pane_surface(surface());
+    let frame = state.compose(200, 28).expect("frame without usage");
+    let text = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !text.contains('$') && !text.contains('▰'),
+        "usage row must stay invisible without reported usage: {text}"
+    );
+
+    let mut with_usage = snapshot();
+    with_usage.agents = vec![agent("pi", AgentStatus::Working, 1)];
+    with_usage.agents[0].usage = Some(crate::protocol::ClientShellAgentUsage {
+        model: Some("claude-opus-5.5".into()),
+        context_permille: Some(431),
+        context_exact: true,
+        context_window: Some(200_000),
+        tokens_in: 1200,
+        tokens_out: 22_000,
+        tokens_cache_read: 38_800,
+        tokens_cache_write: 0,
+        cost_micros_usd: Some(3_410_000),
+        updated_at_unix_ms: Some(0),
+    });
+    state.set_snapshot(Box::new(with_usage));
+    let frame = state.compose(200, 28).expect("frame with usage");
+    let text = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    // The sidebar column has a fixed, narrow width independent of the
+    // terminal size, so `model`/`cost` (flexible-width text tokens) get
+    // truncated with an ellipsis here; `context` has a fixed width and
+    // always renders in full.
+    assert!(
+        text.contains("opus…") || text.contains("opus-5.5"),
+        "frame: {text}"
+    );
+    assert!(text.contains("▰▰▱▱▱ 43%"), "frame: {text}");
+    assert!(
+        text.contains("$3.…") || text.contains("$3.41"),
+        "frame: {text}"
+    );
 }

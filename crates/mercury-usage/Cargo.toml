@@ -1,0 +1,14 @@
+[package]
+name = "mercury-usage"
+version = "0.0.0"
+edition = "2021"
+description = "Mercury usage readers (Claude Code transcripts, Codex rollouts, statusline) and budget windows"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = { version = "0.3.47", features = ["parsing", "formatting"] }
+
+[dev-dependencies]
+toml = "0.8"

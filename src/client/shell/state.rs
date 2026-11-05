@@ -28,7 +28,7 @@ pub(crate) struct ClientShellConfig {
     pub(super) sound_enabled: bool,
     pub(super) toast_delivery: crate::config::ToastDelivery,
     pub(super) toast_delay_seconds: u64,
-    pub(super) toast_position: crate::config::ToastHerdrPosition,
+    pub(super) toast_position: crate::config::ToastMercuryPosition,
     pub(super) copy_on_select: bool,
     pub(super) clipboard_toast_enabled: bool,
     pub(super) clipboard_toast_position: crate::config::ToastClipboardPosition,
@@ -51,6 +51,10 @@ pub(crate) struct ClientShellConfig {
     pub(super) preferences: preferences::ClientChromePreferences,
     pub(super) startup_config_diagnostic: Option<String>,
     pub(super) startup_onboarding: bool,
+    /// `[usage]` (D7, Fase 2 passo 5): `compact_at`/`agents.<id>.compact_at`
+    /// for the context-fill toast (`endpoint_agent_state.rs`); budget
+    /// evaluation itself is server-side (`src/app/usage.rs`).
+    pub(super) usage: crate::config::UsageConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +142,19 @@ pub(super) struct ShellHitMap {
     pub(super) release_notes_scrollbar: Rect,
     pub(super) release_notes_scroll_metrics: Option<crate::pane::ScrollMetrics>,
     pub(super) release_notes_max_scroll: usize,
+    pub(super) usage_chip: Rect,
+    pub(super) crons_chip: Rect,
+    pub(super) history_chip: Rect,
+    pub(super) learn_chip: Rect,
+    pub(super) knowledge_chip: Rect,
+    pub(super) history_rows: Vec<(Rect, usize)>,
+    pub(super) learn_rows: Vec<(Rect, usize)>,
+    pub(super) crons_rows: Vec<(Rect, usize)>,
+    pub(super) cron_controls: Vec<(Rect, char)>,
+    pub(super) usage_rows: Vec<(Rect, String)>,
+    pub(super) usage_body: Rect,
+    pub(super) usage_max_scroll: usize,
+    pub(super) usage_cursor_pane_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -274,6 +291,98 @@ pub(super) enum ClientShellMode {
     Navigate,
     Resize,
     Copy,
+}
+
+/// Which persistent area the pane surface shows, distinct from `ClientShellMode`
+/// (an input mode). `Usage` replaces the pane surface with the Usage panel
+/// while the sidebar and tab bar keep rendering around it (D6 in
+/// `docs/dev/usage-ui-design.md`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum ClientShellView {
+    #[default]
+    Terminal,
+    Usage,
+    Crons,
+    History,
+    Learn,
+    Knowledge,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum LearnPage {
+    #[default]
+    List,
+    Detail,
+    Triggers,
+    Metrics,
+}
+
+#[derive(Default)]
+pub(super) struct LearnViewState {
+    pub(super) changes: Vec<crate::api::schema::LearnChangeInfo>,
+    pub(super) status: Option<crate::api::schema::LearnStatusInfo>,
+    pub(super) load_error: bool,
+    pub(super) detail: Option<crate::api::schema::LearnChangeDetail>,
+    pub(super) diff: Option<crate::api::schema::LearnDiffInfo>,
+    pub(super) selected: usize,
+    pub(super) scroll: usize,
+    pub(super) selected_trigger: usize,
+    pub(super) trigger_scroll: usize,
+    pub(super) selected_metric: usize,
+    pub(super) metric_scroll: usize,
+    pub(super) page: LearnPage,
+    pub(super) loading: bool,
+    pub(super) refresh_pending: bool,
+    pub(super) confirm_undo_id: Option<String>,
+}
+
+#[derive(Default)]
+pub(super) struct HistoryViewState {
+    pub(super) query: String,
+    pub(super) editing: bool,
+    pub(super) editing_original_query: Option<String>,
+    pub(super) provider: Option<String>,
+    pub(super) cwd: Option<String>,
+    pub(super) date_mode: u8,
+    pub(super) hits: Vec<crate::api::schema::HistoryHitInfo>,
+    pub(super) selected: usize,
+    pub(super) scroll: usize,
+    pub(super) loading: bool,
+    pub(super) refresh_pending: bool,
+}
+
+pub(super) struct HistoryResumeRetry {
+    pub(super) params: crate::api::schema::AgentStartParams,
+    pub(super) attempts: u8,
+    pub(super) at: std::time::Instant,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum CronsPage {
+    #[default]
+    Jobs,
+    Runs,
+    Log,
+}
+
+#[derive(Default)]
+pub(super) struct CronsViewState {
+    pub(super) form: Option<super::cron_form::CronForm>,
+    pub(super) deleting: Option<(String, String)>,
+    pub(super) deleting_pending: bool,
+    pub(super) jobs: Vec<crate::api::schema::CronJobInfo>,
+    pub(super) latest_list_request_id: Option<String>,
+    pub(super) error: Option<String>,
+    pub(super) notice: Option<String>,
+    pub(super) confirmed_job_id: Option<String>,
+    pub(super) definition: Option<crate::api::schema::CronJobDefinition>,
+    pub(super) runs: Vec<crate::api::schema::CronRunInfo>,
+    pub(super) log: Option<String>,
+    pub(super) selected_job: usize,
+    pub(super) selected_run: usize,
+    pub(super) scroll: usize,
+    pub(super) page: CronsPage,
+    pub(super) loading: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -414,6 +523,7 @@ impl ClientSettingsSection {
 pub(super) struct ClientSettingsOverlay {
     pub(super) section: ClientSettingsSection,
     pub(super) selected: usize,
+    pub(super) theme_names: Vec<String>,
     pub(super) original_theme_name: String,
     pub(super) original_palette: Palette,
     pub(super) integrations: Vec<crate::api::schema::IntegrationInfo>,
@@ -616,6 +726,52 @@ impl ClientShellOverlay {
 #[derive(Debug)]
 pub(super) enum PendingEndpointKind {
     Generic,
+    HistorySearch,
+    Knowledge,
+    LearnList,
+    LearnStatus,
+    LearnShow {
+        change_id: String,
+    },
+    LearnDiff {
+        change_id: String,
+    },
+    LearnUndo {
+        change_id: String,
+    },
+    HistoryResolve {
+        provider: String,
+        session_id: String,
+    },
+    HistoryPaneSplit {
+        provider: String,
+        session_id: String,
+    },
+    HistoryAgentStart {
+        params: crate::api::schema::AgentStartParams,
+        attempts: u8,
+    },
+    CronList,
+    CronRuns {
+        job_id: String,
+    },
+    CronDetail {
+        job_id: String,
+    },
+    CronLog {
+        run_id: String,
+    },
+    CronGet {
+        job_id: String,
+    },
+    CronMutation,
+    CronPreview {
+        key: String,
+    },
+    CronFormSave,
+    CronFormRemove {
+        job_id: String,
+    },
     ProductAnnouncementDismiss {
         version: String,
         id: String,
@@ -937,6 +1093,17 @@ pub(crate) struct ClientShellState {
     pub(super) endpoint_error: Option<String>,
     pub(super) endpoint_error_deadline: Option<std::time::Instant>,
     pub(super) dismissed_product_announcement: Option<(String, String)>,
+    pub(super) view: ClientShellView,
+    pub(super) usage_view_scroll: usize,
+    pub(super) usage_refresh_due: Option<std::time::Instant>,
+    pub(super) usage_view_cursor: Option<usize>,
+    pub(super) usage_view_reveal_cursor: bool,
+    pub(super) usage_view_tick_deadline: Option<std::time::Instant>,
+    pub(super) crons_view: CronsViewState,
+    pub(super) history_view: HistoryViewState,
+    pub(super) learn_view: LearnViewState,
+    pub(super) knowledge_view: super::knowledge_view::KnowledgeViewState,
+    pub(super) history_resume_retry: Option<HistoryResumeRetry>,
 }
 
 pub(super) fn product_announcement_state(
@@ -1102,6 +1269,17 @@ impl ClientShellState {
             endpoint_error: None,
             endpoint_error_deadline: None,
             dismissed_product_announcement: None,
+            view: ClientShellView::Terminal,
+            usage_view_scroll: 0,
+            usage_refresh_due: None,
+            usage_view_cursor: None,
+            usage_view_reveal_cursor: false,
+            usage_view_tick_deadline: None,
+            crons_view: CronsViewState::default(),
+            history_view: HistoryViewState::default(),
+            learn_view: LearnViewState::default(),
+            knowledge_view: super::knowledge_view::KnowledgeViewState::default(),
+            history_resume_retry: None,
         }
     }
 
@@ -1858,6 +2036,7 @@ impl ClientShellState {
         self.selection_autoscroll_deadline
             .into_iter()
             .chain(self.selection_repaint_deadline)
+            .chain(self.usage_view_tick_deadline)
             .min()
             .map(|deadline| deadline.saturating_duration_since(now).min(default))
             .unwrap_or(default)

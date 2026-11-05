@@ -14,9 +14,13 @@ pub(crate) use api::test_support::exiting_test_command;
 mod api_helpers;
 pub(crate) use api_helpers::limit_snapshot_lines;
 mod creation;
+pub(crate) mod cron;
 mod custom_commands;
 mod git_refresh;
 mod ids;
+// T010 still needs the observed-session and weekly signal producers.
+#[allow(dead_code)]
+pub(crate) mod learn;
 mod popup;
 mod runtime;
 mod session;
@@ -25,6 +29,10 @@ mod tab_bar_status;
 mod terminal_targets;
 mod terminal_titles;
 mod theme_sync;
+mod usage;
+mod usage_accounts;
+mod usage_codex_app_server;
+mod usage_ledger;
 mod window_title;
 mod worktrees;
 
@@ -119,6 +127,26 @@ pub struct App {
     pub(crate) git_refresh_due_after_in_flight: bool,
     pub(crate) git_identity_refresh_requested: bool,
     pub(crate) git_status_cache: HashMap<std::path::PathBuf, crate::workspace::GitStatusCacheEntry>,
+    pub(crate) usage: usage::UsageService,
+    pub(crate) route: mercury_router::RouteConfig,
+    pub(crate) route_refresh_in_flight: bool,
+    pub(crate) route_refresh_retry_at: Option<Instant>,
+    pub(crate) pending_route_previews:
+        Vec<(crate::api::schema::Request, std::sync::mpsc::Sender<String>)>,
+    pub(crate) cron: Option<cron::CronService>,
+    pub(crate) cron_retry_at: Option<Instant>,
+    pub(crate) cron_learn_usage_retry_at: Option<Instant>,
+    pub(crate) learn: Option<learn::LearnWorker>,
+    pub(crate) learn_config: crate::config::LearnConfig,
+    pub(crate) knowledge_config: mercury_knowledge::Config,
+    pub(crate) learn_transcripts: HashMap<
+        (crate::layout::PaneId, mercury_learn::transcript::Provider),
+        learn::ObservedTranscript,
+    >,
+    /// Sessions touched by cron pane prompts. `*` conservatively excludes the
+    /// next reported session if no identity was known when the prompt queued.
+    pub(crate) learn_excluded_sessions:
+        HashMap<(crate::layout::PaneId, mercury_learn::transcript::Provider), String>,
     pub(crate) pending_api_worktree_creates: HashMap<std::path::PathBuf, u64>,
     pub(crate) worktree_read_slots: std::sync::Arc<tokio::sync::Semaphore>,
     pub(crate) pending_api_worktree_removes: HashMap<String, u64>,
@@ -217,6 +245,9 @@ fn normalize_theme_name(name: &str) -> String {
 
 fn sibling_theme_names(name: &str) -> (String, String) {
     match normalize_theme_name(name).as_str() {
+        "mercury" | "mercury-dark" | "mercury-light" => {
+            ("mercury".to_string(), "mercury-light".to_string())
+        }
         "catppuccin" | "catppuccin-mocha" | "catppuccin-latte" | "latte" | "light" => {
             ("catppuccin".to_string(), "catppuccin-latte".to_string())
         }
@@ -246,6 +277,13 @@ fn theme_runtime_config(
     config: &crate::config::Config,
     use_legacy_ui_accent: bool,
 ) -> state::ThemeRuntimeConfig {
+    let imported = config
+        .theme
+        .loaded_imports()
+        .0
+        .into_iter()
+        .map(|(name, colors)| (name, state::Palette::catppuccin().with_overrides(&colors)))
+        .collect();
     let manual_name = config
         .theme
         .name
@@ -267,6 +305,7 @@ fn theme_runtime_config(
                 .and_then(|c| c.accent.as_ref())
                 .is_none())
         .then(|| config.ui.accent.clone()),
+        imported,
     }
 }
 
@@ -276,14 +315,16 @@ fn resolve_palette_for_theme_name(
     runtime: &state::ThemeRuntimeConfig,
     mode_custom: Option<&crate::config::ModeThemeColors>,
 ) -> state::Palette {
-    let mut palette = state::Palette::from_name(name).unwrap_or_else(|| {
-        tracing::warn!(
-            theme = name,
-            fallback = fallback_name,
-            "unknown theme, falling back"
-        );
-        state::Palette::from_name(fallback_name).unwrap_or_else(state::Palette::catppuccin)
-    });
+    let mut palette = state::Palette::from_name(name)
+        .or_else(|| runtime.imported.get(&normalize_theme_name(name)).cloned())
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                theme = name,
+                fallback = fallback_name,
+                "unknown theme, falling back"
+            );
+            state::Palette::from_name(fallback_name).unwrap_or_else(state::Palette::catppuccin)
+        });
 
     if let Some(custom) = &runtime.custom {
         palette = palette.with_overrides(custom);
@@ -332,6 +373,21 @@ fn resolve_effective_theme(
 
 pub(crate) fn client_theme_runtime_from_config(config: &Config) -> state::ThemeRuntimeConfig {
     theme_runtime_config(config, true)
+}
+
+pub(crate) fn retain_previous_imported_theme_on_reload(
+    current_name: &str,
+    previous: &state::ThemeRuntimeConfig,
+    next: &state::ThemeRuntimeConfig,
+    config: &Config,
+) -> bool {
+    previous.imported.contains_key(current_name)
+        && !next.imported.contains_key(current_name)
+        && config
+            .theme
+            .imports
+            .iter()
+            .any(|import| import.name.eq_ignore_ascii_case(current_name))
 }
 
 pub(crate) fn client_palette_for_theme(
@@ -580,6 +636,19 @@ impl App {
             git_refresh_due_after_in_flight: false,
             git_identity_refresh_requested: false,
             git_status_cache: HashMap::new(),
+            usage: usage::UsageService::new(&config.usage),
+            route: config.route.clone(),
+            route_refresh_in_flight: false,
+            route_refresh_retry_at: None,
+            pending_route_previews: Vec::new(),
+            cron: None,
+            cron_retry_at: None,
+            cron_learn_usage_retry_at: None,
+            learn: None,
+            learn_config: config.learn.clone(),
+            knowledge_config: config.knowledge.clone(),
+            learn_transcripts: HashMap::new(),
+            learn_excluded_sessions: HashMap::new(),
             pending_api_worktree_creates: HashMap::new(),
             worktree_read_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(8)),
             pending_api_worktree_removes: HashMap::new(),
@@ -627,6 +696,13 @@ impl App {
         };
         app.configure_tab_bar_status(&config.ui.tab_bar_right, &config.ui.tab_bar_right_separator);
         app.configure_window_title(&config.ui.window_title);
+        // The cost ledger is persistent user state: only apps that persist
+        // their session own it (never `AppPolicy::TEST`).
+        if policy.persist_session {
+            let event_tx = app.event_tx.clone();
+            app.usage
+                .enable_cost_ledger(mercury_usage::ledger::default_cost_ledger_path(), event_tx);
+        }
         app
     }
 
@@ -861,7 +937,7 @@ impl App {
                 != self.startup_per_agent_delay
         {
             diagnostics.push(
-                "session.startup_per_agent_delay_ms changes require restarting Herdr; kept current setting"
+                "session.startup_per_agent_delay_ms changes require restarting Mercury; kept current setting"
                     .into(),
             );
         }
@@ -872,7 +948,7 @@ impl App {
             && config.kitty_graphics_enabled() != self.state.kitty_graphics_enabled
         {
             diagnostics.push(
-                "terminal.kitty_graphics changes require restarting Herdr; kept current setting"
+                "terminal.kitty_graphics changes require restarting Mercury; kept current setting"
                     .into(),
             );
         }
@@ -946,8 +1022,44 @@ impl App {
         }
 
         if !invalid_section("theme") {
-            self.state.theme_runtime = theme_runtime_config(config, !invalid_section("ui"));
-            self.refresh_effective_app_theme();
+            let next = theme_runtime_config(config, !invalid_section("ui"));
+            if !retain_previous_imported_theme_on_reload(
+                &self.state.theme_name,
+                &self.state.theme_runtime,
+                &next,
+                config,
+            ) {
+                self.state.theme_runtime = next;
+                self.refresh_effective_app_theme();
+            }
+        }
+
+        if !invalid_section("usage") {
+            self.usage.apply_config(&config.usage);
+        }
+        if !invalid_section("route") {
+            self.route = config.route.clone();
+        }
+        if !invalid_section("knowledge") {
+            self.knowledge_config = config.knowledge.clone();
+        }
+        if !invalid_section("learn") && self.learn_config != config.learn {
+            if let Some(worker) = self.learn.take() {
+                worker.disable();
+            }
+            self.learn_config = config.learn.clone();
+            if let Err(error) = self.enable_learn() {
+                diagnostics.push(error);
+            }
+            if self.learn_config.enabled {
+                self.start_cron_learn_usage_sync();
+                self.cron_learn_usage_retry_at = self
+                    .cron
+                    .as_ref()
+                    .map(|_| Instant::now() + cron::LEARN_USAGE_RETRY_INTERVAL);
+            } else {
+                self.cron_learn_usage_retry_at = None;
+            }
         }
 
         let status = if diagnostics.is_empty() {
@@ -1016,7 +1128,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("herdr-{name}-{}-{stamp}", std::process::id()))
+        std::env::temp_dir().join(format!("mercury-{name}-{}-{stamp}", std::process::id()))
     }
 
     fn config_env_lock() -> &'static Mutex<()> {
@@ -1025,7 +1137,7 @@ mod tests {
 
     fn temp_config_path(name: &str) -> std::path::PathBuf {
         let unique = format!(
-            "herdr-{name}-{}-{}",
+            "mercury-{name}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1139,9 +1251,9 @@ mod tests {
     }
 
     #[test]
-    fn notification_show_api_creates_herdr_toast_with_position() {
+    fn notification_show_api_creates_mercury_toast_with_position() {
         let mut app = test_app();
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Mercury;
 
         let response =
             app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
@@ -1150,7 +1262,7 @@ mod tests {
                     crate::api::schema::NotificationShowParams {
                         title: "build failed".into(),
                         body: Some("api workspace".into()),
-                        position: Some(crate::config::ToastHerdrPosition::TopLeft),
+                        position: Some(crate::config::ToastMercuryPosition::TopLeft),
                         sound: crate::api::schema::NotificationShowSound::None,
                     },
                 ),
@@ -1169,7 +1281,7 @@ mod tests {
         assert_eq!(toast.context, "api workspace");
         assert_eq!(
             toast.position,
-            Some(crate::config::ToastHerdrPosition::TopLeft)
+            Some(crate::config::ToastMercuryPosition::TopLeft)
         );
         assert!(app.toast_deadline.is_some());
     }
@@ -1206,7 +1318,7 @@ mod tests {
     #[test]
     fn notification_show_api_does_not_replace_existing_toast() {
         let mut app = test_app();
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Mercury;
         app.state.toast = Some(crate::app::state::ToastNotification {
             kind: crate::app::state::ToastKind::NeedsAttention,
             title: "pi needs attention".to_string(),
@@ -1245,7 +1357,7 @@ mod tests {
     #[test]
     fn notification_show_api_is_rate_limited() {
         let mut app = test_app();
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Mercury;
         app.mark_api_notification_shown(Instant::now());
 
         let response =
@@ -1294,7 +1406,7 @@ mod tests {
             app.event_tx
                 .try_send(AppEvent::UpdateReady {
                     version: format!("2.0.{i}"),
-                    install_command: "herdr install".into(),
+                    install_command: "mercury install".into(),
                 })
                 .unwrap();
         }
@@ -1316,7 +1428,7 @@ mod tests {
             app.event_tx
                 .try_send(AppEvent::UpdateReady {
                     version: format!("3.0.{i}"),
-                    install_command: "herdr install".into(),
+                    install_command: "mercury install".into(),
                 })
                 .unwrap();
         }
@@ -1383,6 +1495,38 @@ mod tests {
         assert!(!app.state.theme_runtime.auto_switch);
         assert_eq!(app.state.theme_name, "tokyo-night");
         assert_eq!(app.state.palette, state::Palette::tokyo_night());
+    }
+
+    #[test]
+    fn failed_import_on_reload_keeps_previous_selected_palette() {
+        let path = unique_temp_path("theme-import-reload");
+        std::fs::write(&path, "background = #112233\nforeground = #ddeeff\n").unwrap();
+        let config: Config = toml::from_str(&format!(
+            "[theme]\nname = \"ocean\"\n[[theme.import]]\nname = \"ocean\"\npath = {:?}\nformat = \"ghostty\"\n",
+            path.display().to_string()
+        ))
+        .unwrap();
+        let previous = theme_runtime_config(&config, true);
+        assert!(previous.imported.contains_key("ocean"));
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &config,
+            AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let palette = app.state.palette.clone();
+        std::fs::remove_file(path).unwrap();
+        let next = theme_runtime_config(&config, true);
+        assert!(!next.imported.contains_key("ocean"));
+        assert!(retain_previous_imported_theme_on_reload(
+            "ocean", &previous, &next, &config
+        ));
+        let report = app.apply_live_config(&config, &config.collect_diagnostics(), &[], false);
+        assert!(!report.diagnostics.is_empty());
+        assert_eq!(app.state.theme_name, "ocean");
+        assert_eq!(app.state.palette, palette);
     }
 
     #[test]
@@ -1533,7 +1677,7 @@ mod tests {
         crate::release_notes::save_pending("99.99.99", "### Changed\n- One").unwrap();
         app.handle_internal_event(AppEvent::UpdateReady {
             version: "99.99.99".into(),
-            install_command: "herdr update".into(),
+            install_command: "mercury update".into(),
         });
 
         assert_eq!(
@@ -1686,13 +1830,35 @@ mod tests {
     }
 
     #[test]
+    fn reload_disabling_learn_discards_worker_without_review() {
+        let root = unique_temp_path("learn-disable");
+        std::fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let mut app = test_app();
+        app.learn_config.enabled = true;
+        app.learn = Some(
+            learn::LearnWorker::start(&root.join("learn"), true, |_, _| {
+                panic!("disabled Learn must not review")
+            })
+            .unwrap(),
+        );
+
+        let report = app.apply_live_config(&Config::default(), &[], &[], false);
+
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
+        assert!(!app.learn_config.enabled);
+        assert!(app.learn.is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn reload_config_updates_live_state() {
         let _guard = config_env_lock().lock().unwrap();
         let path = temp_config_path("reload-config-success");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             &path,
-            "[terminal]\ndefault_shell = \"nu\"\nshell_mode = \"non_login\"\nnew_cwd = \"home\"\n[keys]\nnew_workspace = \"prefix+m\"\nprefix = \"ctrl+a\"\n[update]\nversion_check = false\nmanifest_check = false\n[server]\nheadless_cols = 160\nheadless_rows = 50\n[ui]\nagent_panel_sort = \"priority\"\n[ui.toast]\ndelivery = \"herdr\"\n",
+            "[terminal]\ndefault_shell = \"nu\"\nshell_mode = \"non_login\"\nnew_cwd = \"home\"\n[keys]\nnew_workspace = \"prefix+m\"\nprefix = \"ctrl+a\"\n[update]\nversion_check = false\nmanifest_check = false\n[server]\nheadless_cols = 160\nheadless_rows = 50\n[ui]\nagent_panel_sort = \"priority\"\n[ui.toast]\ndelivery = \"mercury\"\n",
         )
         .unwrap();
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
@@ -1715,7 +1881,7 @@ mod tests {
             .matches_prefix(&KeyEvent::new(KeyCode::Char('m'), KeyModifiers::empty())));
         assert_eq!(
             app.state.toast_config.delivery,
-            crate::config::ToastDelivery::Herdr
+            crate::config::ToastDelivery::Mercury
         );
         assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Priority);
         let report = app.reload_config();
@@ -1745,6 +1911,40 @@ mod tests {
     }
 
     #[test]
+    fn reload_config_applies_usage_poll_cadence_and_budgets() {
+        let _guard = config_env_lock().lock().unwrap();
+        let path = temp_config_path("reload-config-usage");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "[usage]\npoll_active_ms = 250\npoll_idle_ms = 2500\n\n[[usage.budget]]\nname = \"claude-tokens\"\nwindow = { kind = \"rolling\", hours = 1 }\nlimit = { tokens = 1000 }\n",
+        )
+        .unwrap();
+        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+
+        let mut app = test_app();
+        let report = app.reload_config();
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
+
+        assert_eq!(
+            app.usage.poll_interval(crate::detect::AgentState::Working),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            app.usage.poll_interval(crate::detect::AgentState::Idle),
+            Duration::from_millis(2500)
+        );
+        let summary = app
+            .usage_summary_wire()
+            .expect("the reloaded budget is worth showing even before it has usage");
+        assert_eq!(summary.budgets.len(), 1);
+        assert_eq!(summary.budgets[0].name, "claude-tokens");
+
+        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
     fn reload_config_keeps_kitty_graphics_until_restart() {
         let _guard = config_env_lock().lock().unwrap();
         let path = temp_config_path("reload-config-kitty-graphics");
@@ -1762,7 +1962,7 @@ mod tests {
         assert_eq!(
             report.diagnostics,
             vec![
-                "terminal.kitty_graphics changes require restarting Herdr; kept current setting"
+                "terminal.kitty_graphics changes require restarting Mercury; kept current setting"
                     .to_owned()
             ]
         );
@@ -1783,7 +1983,7 @@ mod tests {
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
         assert_eq!(app.startup_per_agent_delay, Duration::from_millis(100));
         assert_eq!(report.diagnostics, vec![
-            "session.startup_per_agent_delay_ms changes require restarting Herdr; kept current setting"
+            "session.startup_per_agent_delay_ms changes require restarting Mercury; kept current setting"
         ]);
 
         let report = app.apply_live_config(&config, &[], &["session".into()], false);
@@ -1942,7 +2142,7 @@ mod tests {
         );
         assert_eq!(
             app.state.config_diagnostic.as_deref(),
-            Some("config.toml; herdr config check")
+            Some("config.toml; mercury config check")
         );
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
@@ -2004,7 +2204,7 @@ mod tests {
         assert_eq!(app.state.pane_borders, target_pane_borders);
         assert_eq!(
             app.state.config_diagnostic.as_deref(),
-            Some("config.toml has unknown keys; herdr config check")
+            Some("config.toml has unknown keys; mercury config check")
         );
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
@@ -2056,7 +2256,7 @@ mod tests {
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
 
         let mut app = test_app();
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Mercury;
         let report = app.reload_config();
 
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
@@ -2071,7 +2271,7 @@ mod tests {
             .matches_prefix(&KeyEvent::new(KeyCode::Char('m'), KeyModifiers::empty())));
         assert_eq!(
             app.state.toast_config.delivery,
-            crate::config::ToastDelivery::Herdr
+            crate::config::ToastDelivery::Mercury
         );
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -2133,7 +2333,7 @@ mod tests {
             .config_diagnostic
             .as_deref()
             .is_some_and(|message| {
-                message == "config.toml invalid; keeping current config; herdr config check"
+                message == "config.toml invalid; keeping current config; mercury config check"
             }));
         assert!(app.state.toast.is_none());
 
@@ -2354,8 +2554,8 @@ mod tests {
     #[test]
     fn workspace_creation_in_navigate_mode_uses_selected_workspace_seed_cwd() {
         let mut app = test_app();
-        let mut first = Workspace::test_new("herdr");
-        first.identity_cwd = std::path::PathBuf::from("/tmp/herdr");
+        let mut first = Workspace::test_new("mercury");
+        first.identity_cwd = std::path::PathBuf::from("/tmp/mercury");
         let mut second = Workspace::test_new("pion");
         second.identity_cwd = std::path::PathBuf::from("/tmp/pion");
 
@@ -2375,10 +2575,10 @@ mod tests {
     fn new_terminal_cwd_follow_uses_source_cwd() {
         let cwd = creation::resolve_new_terminal_cwd(
             &crate::config::NewTerminalCwdConfig::Follow,
-            Some(std::path::PathBuf::from("/tmp/herdr-source")),
+            Some(std::path::PathBuf::from("/tmp/mercury-source")),
         );
 
-        assert_eq!(cwd, std::path::PathBuf::from("/tmp/herdr-source"));
+        assert_eq!(cwd, std::path::PathBuf::from("/tmp/mercury-source"));
     }
 
     #[test]
@@ -2396,11 +2596,11 @@ mod tests {
     #[test]
     fn new_terminal_cwd_path_uses_configured_path() {
         let cwd = creation::resolve_new_terminal_cwd(
-            &crate::config::NewTerminalCwdConfig::Path("/tmp/herdr-fixed".into()),
-            Some(std::path::PathBuf::from("/tmp/herdr-source")),
+            &crate::config::NewTerminalCwdConfig::Path("/tmp/mercury-fixed".into()),
+            Some(std::path::PathBuf::from("/tmp/mercury-source")),
         );
 
-        assert_eq!(cwd, std::path::PathBuf::from("/tmp/herdr-fixed"));
+        assert_eq!(cwd, std::path::PathBuf::from("/tmp/mercury-fixed"));
     }
 
     #[test]
@@ -2896,7 +3096,7 @@ mod tests {
         assert_eq!(
             retry["result"]["agent"]["agent_session"],
             serde_json::json!({
-                "source": "herdr:codex",
+                "source": "mercury:codex",
                 "agent": "codex",
                 "kind": "id",
                 "value": "codex-session",
@@ -2981,17 +3181,17 @@ mod tests {
         let mut parent = Workspace::test_new("api-pane-close-parent");
         parent.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),
-            label: "herdr".into(),
-            repo_root: "/repo/herdr".into(),
-            checkout_path: "/repo/herdr".into(),
+            label: "mercury".into(),
+            repo_root: "/repo/mercury".into(),
+            checkout_path: "/repo/mercury".into(),
             is_linked_worktree: false,
         });
         let mut child = Workspace::test_new("api-pane-close-child");
         child.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),
-            label: "herdr".into(),
-            repo_root: "/repo/herdr".into(),
-            checkout_path: "/repo/herdr-child".into(),
+            label: "mercury".into(),
+            repo_root: "/repo/mercury".into(),
+            checkout_path: "/repo/mercury-child".into(),
             is_linked_worktree: true,
         });
         app.state.workspaces = vec![parent, child];
@@ -3267,7 +3467,7 @@ mod tests {
             app.event_tx
                 .try_send(AppEvent::UpdateReady {
                     version: format!("9.9.{i}"),
-                    install_command: "herdr update".into(),
+                    install_command: "mercury update".into(),
                 })
                 .unwrap();
         }

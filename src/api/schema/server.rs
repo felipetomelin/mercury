@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub const MERCURY_FEATURE_GENERATION: u32 = 1;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
 pub struct PingParams {}
 
@@ -27,6 +29,10 @@ pub struct ServerCapabilities {
     /// Stable client-owned endpoint generation supported by this server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint_protocol_generation: Option<u32>,
+    /// Feature set of this Mercury fork; absent on servers built before the
+    /// local Usage, Crons, Route, History and Learn endpoints were added.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mercury_feature_generation: Option<u32>,
     /// Whether this server supports explicit client-shell surface interest.
     #[serde(default)]
     pub surface_interest: bool,

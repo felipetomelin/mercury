@@ -128,7 +128,7 @@ impl ClientShellConfig {
             sound_enabled: config.ui.sound.enabled,
             toast_delivery: config.ui.toast.delivery,
             toast_delay_seconds: config.ui.toast.delay_seconds,
-            toast_position: config.ui.toast.herdr.position,
+            toast_position: config.ui.toast.mercury.position,
             copy_on_select: config.ui.copy_on_select,
             clipboard_toast_enabled: config.ui.toast.clipboard.enabled,
             clipboard_toast_position: config.ui.toast.clipboard.position,
@@ -159,6 +159,7 @@ impl ClientShellConfig {
             preferences: preferences::ClientChromePreferences::default(),
             startup_config_diagnostic: None,
             startup_onboarding: false,
+            usage: config.usage.clone(),
         }
     }
 
@@ -330,7 +331,7 @@ impl ClientShellConfig {
                 self.sound_enabled = ui.sound.enabled;
                 self.toast_delivery = ui.toast.delivery;
                 self.toast_delay_seconds = ui.toast.delay_seconds;
-                self.toast_position = ui.toast.herdr.position;
+                self.toast_position = ui.toast.mercury.position;
                 self.copy_on_select = ui.copy_on_select;
                 self.clipboard_toast_enabled = ui.toast.clipboard.enabled;
                 self.clipboard_toast_position = ui.toast.clipboard.position;
@@ -345,13 +346,25 @@ impl ClientShellConfig {
         }
 
         if !invalid_section("theme") {
-            self.theme_runtime = crate::app::client_theme_runtime_from_config(config);
-            self.theme_name = self.theme_runtime.manual_name.clone();
-            self.palette = crate::app::client_palette_from_config(config);
+            let next = crate::app::client_theme_runtime_from_config(config);
+            if !crate::app::retain_previous_imported_theme_on_reload(
+                &self.theme_name,
+                &self.theme_runtime,
+                &next,
+                config,
+            ) {
+                self.theme_runtime = next;
+                self.theme_name = self.theme_runtime.manual_name.clone();
+                self.palette = crate::app::client_palette_from_config(config);
+            }
         }
         if !invalid_section("experimental") {
             self.switch_ascii_input_source_in_prefix =
                 config.experimental.switch_ascii_input_source_in_prefix;
+        }
+
+        if !invalid_section("usage") {
+            self.usage = config.usage.clone();
         }
 
         diagnostics
@@ -498,7 +511,7 @@ mod tests {
     #[test]
     fn initial_surface_size_uses_persisted_endpoint_chrome() {
         let path = std::env::temp_dir().join(format!(
-            "herdr-initial-shell-preferences-{}.json",
+            "mercury-initial-shell-preferences-{}.json",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);

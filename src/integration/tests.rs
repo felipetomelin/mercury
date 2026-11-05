@@ -19,7 +19,7 @@ use serde_json::{json, Map, Value};
 fn windows_powershell_encoded_hook_command_preserves_script_invocation() {
     use base64::Engine;
 
-    let hook_path = Path::new(r"C:\Users\O'Neil λ\App Data\hooks\herdr-agent-state.ps1");
+    let hook_path = Path::new(r"C:\Users\O'Neil λ\App Data\hooks\mercury-agent-state.ps1");
     let command = powershell_encoded_hook_command(hook_path, "session");
     let encoded = command
         .strip_prefix("powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ")
@@ -35,14 +35,14 @@ fn windows_powershell_encoded_hook_command_preserves_script_invocation() {
     assert!(chunks.remainder().is_empty(), "UTF-16LE payload");
     assert_eq!(
         String::from_utf16(&utf16).expect("PowerShell script"),
-        r"& 'C:\Users\O''Neil λ\App Data\hooks\herdr-agent-state.ps1' session"
+        r"& 'C:\Users\O''Neil λ\App Data\hooks\mercury-agent-state.ps1' session"
     );
 }
 
 #[cfg(windows)]
 #[test]
 fn windows_antigravity_cli_hook_command_uses_encoded_powershell() {
-    let hook_path = Path::new(r"C:\Users\reporter\.gemini\config\hooks\herdr-agent-state.ps1");
+    let hook_path = Path::new(r"C:\Users\reporter\.gemini\config\hooks\mercury-agent-state.ps1");
     assert_eq!(
         antigravity_cli_hook_command(hook_path, "session"),
         powershell_encoded_hook_command(hook_path, "session")
@@ -87,7 +87,7 @@ fn agent_version_requirement_only_set_for_kimi() {
 fn enforce_agent_version_warns_when_binary_missing() {
     let requirement = AgentVersionRequirement {
         label: "kimi code",
-        binary: "herdr-test-binary-that-does-not-exist",
+        binary: "mercury-test-binary-that-does-not-exist",
         args: &["--version"],
         min_version: "0.14.0",
     };
@@ -183,7 +183,7 @@ fn assert_kimi_hook(
 fn unique_base() -> PathBuf {
     clear_integration_path_env();
     std::env::temp_dir().join(format!(
-        "herdr-integration-install-test-{}-{}",
+        "mercury-integration-install-test-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -514,7 +514,7 @@ fn integration_recommendation_installs_available_or_outdated_targets() {
         label: "claude",
         command: "claude",
         available: false,
-        path: PathBuf::from("/tmp/herdr-agent-state.sh"),
+        path: PathBuf::from("/tmp/mercury-agent-state.sh"),
         state: IntegrationStatusKind::NotInstalled,
     };
     assert!(!recommendation.needs_install());
@@ -655,7 +655,7 @@ fn install_omp_removes_legacy_pi_integration_from_omp_extensions_dir() {
 }
 
 #[test]
-fn install_omp_preserves_non_herdr_file_with_pi_install_name() {
+fn install_omp_preserves_non_mercury_file_with_pi_install_name() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let home = base.join("home");
@@ -824,7 +824,7 @@ fn outdated_integrations_treat_missing_version_marker_as_legacy() {
     let ext_dir = home.join(".pi/agent/extensions");
     fs::create_dir_all(&ext_dir).unwrap();
     let extension_path = ext_dir.join(PI_EXTENSION_INSTALL_NAME);
-    fs::write(&extension_path, "// installed by herdr\n").unwrap();
+    fs::write(&extension_path, "// installed by mercury\n").unwrap();
     std::env::set_var("HOME", &home);
 
     let outdated = outdated_installed_integrations();
@@ -852,7 +852,7 @@ fn outdated_integrations_detect_previous_pi_version() {
     let extension_path = ext_dir.join(PI_EXTENSION_INSTALL_NAME);
     fs::write(
         &extension_path,
-        "// HERDR_INTEGRATION_ID=pi\n// HERDR_INTEGRATION_VERSION=4\n",
+        "// MERCURY_INTEGRATION_ID=pi\n// MERCURY_INTEGRATION_VERSION=4\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -882,7 +882,7 @@ fn outdated_integrations_detect_previous_omp_version() {
     let extension_path = ext_dir.join(OMP_EXTENSION_INSTALL_NAME);
     fs::write(
         &extension_path,
-        "// HERDR_INTEGRATION_ID=omp\n// HERDR_INTEGRATION_VERSION=4\n",
+        "// MERCURY_INTEGRATION_ID=omp\n// MERCURY_INTEGRATION_VERSION=4\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -973,8 +973,14 @@ fn install_claude_writes_hook_and_updates_settings() {
     assert!(settings["hooks"].get("PostToolUse").is_none());
     assert!(settings["hooks"].get("PostToolUseFailure").is_none());
     assert!(settings["hooks"].get("SubagentStop").is_none());
-    assert!(settings["hooks"].get("Stop").is_none());
-    assert!(settings["hooks"].get("SessionEnd").is_none());
+    assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .contains(" turn"));
+    assert!(settings["hooks"]["SessionEnd"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .contains(" end"));
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -1025,8 +1031,8 @@ fn install_claude_is_idempotent_for_hook_entries() {
     assert!(settings["hooks"].get("PostToolUse").is_none());
     assert!(settings["hooks"].get("PostToolUseFailure").is_none());
     assert!(settings["hooks"].get("SubagentStop").is_none());
-    assert!(settings["hooks"].get("Stop").is_none());
-    assert!(settings["hooks"].get("SessionEnd").is_none());
+    assert_eq!(settings["hooks"]["Stop"].as_array().unwrap().len(), 1);
+    assert_eq!(settings["hooks"]["SessionEnd"].as_array().unwrap().len(), 1);
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -1103,7 +1109,10 @@ fn install_claude_removes_deprecated_completion_hooks_and_preserves_user_hooks()
     );
     assert!(settings["hooks"].get("UserPromptSubmit").is_none());
     assert!(settings["hooks"].get("PreToolUse").is_none());
-    assert!(settings["hooks"].get("Stop").is_none());
+    assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .contains(" turn"));
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -1119,7 +1128,7 @@ fn claude_v9_integration_status_is_outdated_until_reinstalled() {
     let hook_path = claude_hooks_dir.join(CLAUDE_HOOK_INSTALL_NAME);
     fs::write(
         &hook_path,
-        "#!/bin/sh\n# HERDR_INTEGRATION_ID=claude\n# HERDR_INTEGRATION_VERSION=9\n",
+        "#!/bin/sh\n# MERCURY_INTEGRATION_ID=claude\n# MERCURY_INTEGRATION_VERSION=9\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -1132,7 +1141,7 @@ fn claude_v9_integration_status_is_outdated_until_reinstalled() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(9));
-    assert_eq!(claude.expected_version, 10);
+    assert_eq!(claude.expected_version, 11);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     install_claude().unwrap();
@@ -1141,7 +1150,7 @@ fn claude_v9_integration_status_is_outdated_until_reinstalled() {
         hook_path,
         CLAUDE_INTEGRATION_VERSION,
     );
-    assert_eq!(status.installed_version, Some(10));
+    assert_eq!(status.installed_version, Some(11));
     assert_eq!(status.state, IntegrationStatusKind::Current);
 
     std::env::remove_var("HOME");
@@ -1158,7 +1167,7 @@ fn claude_v2_integration_status_is_outdated() {
     let hook_path = claude_hooks_dir.join(CLAUDE_HOOK_INSTALL_NAME);
     fs::write(
         &hook_path,
-        "#!/bin/sh\n# HERDR_INTEGRATION_ID=claude\n# HERDR_INTEGRATION_VERSION=2\n",
+        "#!/bin/sh\n# MERCURY_INTEGRATION_ID=claude\n# MERCURY_INTEGRATION_VERSION=2\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -1171,7 +1180,7 @@ fn claude_v2_integration_status_is_outdated() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(2));
-    assert_eq!(claude.expected_version, 10);
+    assert_eq!(claude.expected_version, 11);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -1179,7 +1188,7 @@ fn claude_v2_integration_status_is_outdated() {
 }
 
 #[test]
-fn uninstall_claude_removes_herdr_hooks_and_preserves_others() {
+fn uninstall_claude_removes_mercury_hooks_and_preserves_others() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let home = base.join("home");
@@ -1291,7 +1300,7 @@ fn codex_v2_integration_status_is_outdated() {
     let hook_path = codex_dir.join(CODEX_HOOK_INSTALL_NAME);
     fs::write(
         &hook_path,
-        "#!/bin/sh\n# HERDR_INTEGRATION_ID=codex\n# HERDR_INTEGRATION_VERSION=2\n",
+        "#!/bin/sh\n# MERCURY_INTEGRATION_ID=codex\n# MERCURY_INTEGRATION_VERSION=2\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -1304,7 +1313,7 @@ fn codex_v2_integration_status_is_outdated() {
 
     assert_eq!(codex.path, hook_path);
     assert_eq!(codex.installed_version, Some(2));
-    assert_eq!(codex.expected_version, 8);
+    assert_eq!(codex.expected_version, 9);
     assert_eq!(codex.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -1427,7 +1436,7 @@ fn install_codex_only_migrates_top_level_feature_flags() {
 }
 
 #[test]
-fn uninstall_codex_removes_herdr_hooks_and_leaves_config_alone() {
+fn uninstall_codex_removes_mercury_hooks_and_leaves_config_alone() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let home = base.join("home");
@@ -1706,7 +1715,7 @@ fn install_copilot_writes_hook_and_updates_settings() {
         if let Some(entries) = settings["hooks"].get(event) {
             assert!(
                 !entries.to_string().contains(COPILOT_HOOK_INSTALL_NAME),
-                "expected herdr hooks.{event} entries to be removed"
+                "expected mercury hooks.{event} entries to be removed"
             );
         }
     }
@@ -1726,7 +1735,7 @@ fn copilot_v1_integration_status_is_outdated() {
     let hook_path = copilot_hooks_dir.join(COPILOT_HOOK_INSTALL_NAME);
     fs::write(
         &hook_path,
-        "#!/bin/sh\n# HERDR_INTEGRATION_ID=copilot\n# HERDR_INTEGRATION_VERSION=1\n",
+        "#!/bin/sh\n# MERCURY_INTEGRATION_ID=copilot\n# MERCURY_INTEGRATION_VERSION=1\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -1782,7 +1791,7 @@ fn install_copilot_uses_copilot_home_env_and_is_idempotent() {
 }
 
 #[test]
-fn uninstall_copilot_removes_herdr_hooks_and_preserves_others() {
+fn uninstall_copilot_removes_mercury_hooks_and_preserves_others() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let home = base.join("home");
@@ -2004,7 +2013,7 @@ fn install_devin_removes_legacy_lifecycle_hook_entries() {
 }
 
 #[test]
-fn uninstall_devin_removes_herdr_hooks_and_preserves_others() {
+fn uninstall_devin_removes_mercury_hooks_and_preserves_others() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let xdg_config = base.join("xdg");
@@ -2185,7 +2194,7 @@ fn droid_v1_integration_status_is_outdated() {
     let hook_path = droid_hooks_dir.join(DROID_HOOK_INSTALL_NAME);
     fs::write(
         &hook_path,
-        "#!/bin/sh\n# HERDR_INTEGRATION_ID=droid\n# HERDR_INTEGRATION_VERSION=1\n",
+        "#!/bin/sh\n# MERCURY_INTEGRATION_ID=droid\n# MERCURY_INTEGRATION_VERSION=1\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -2206,7 +2215,7 @@ fn droid_v1_integration_status_is_outdated() {
 }
 
 #[test]
-fn uninstall_droid_removes_herdr_hooks_and_preserves_others() {
+fn uninstall_droid_removes_mercury_hooks_and_preserves_others() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let home = base.join("home");
@@ -2341,7 +2350,7 @@ fn opencode_reuses_json_registration_in_symlinked_config_directory() {
     std::os::unix::fs::symlink(&dotfiles, &dir).unwrap();
     std::env::set_var("HOME", &home);
     let json_path = dir.join("tui.json");
-    let original = "{\n  // User preferences\n  \"theme\":\"system\",\n  \"plugin\":[\"other\",[\"./herdr-tui-session.js\",{\"enabled\":true}]]\n}\n";
+    let original = "{\n  // User preferences\n  \"theme\":\"system\",\n  \"plugin\":[\"other\",[\"./mercury-tui-session.js\",{\"enabled\":true}]]\n}\n";
     fs::write(&json_path, original).unwrap();
 
     for _ in 0..2 {
@@ -2365,7 +2374,7 @@ fn opencode_reuses_json_registration_in_symlinked_config_directory() {
     let jsonc_path = dir.join("tui.jsonc");
     fs::write(
         &jsonc_path,
-        r#"{"plugin":["./herdr-tui-session.js","another"]}"#,
+        r#"{"plugin":["./mercury-tui-session.js","another"]}"#,
     )
     .unwrap();
     assert_eq!(install_opencode().unwrap().tui_config_path, jsonc_path);
@@ -2376,7 +2385,7 @@ fn opencode_reuses_json_registration_in_symlinked_config_directory() {
     );
     let json = fs::read_to_string(&json_path).unwrap();
     assert!(json.contains("// User preferences"));
-    assert!(!json.contains("herdr-tui-session.js"));
+    assert!(!json.contains("mercury-tui-session.js"));
     assert!(json.contains("\"other\""));
     assert!(json.contains("\"system\""));
     assert_eq!(
@@ -2471,7 +2480,7 @@ fn opencode_hard_link_rejection_precedes_install_and_uninstall_asset_changes() {
     let plugin = dir.join("plugins").join(OPENCODE_PLUGIN_INSTALL_NAME);
     fs::write(&plugin, "previous integration").unwrap();
     let config = dir.join("cli.json");
-    let original = r#"{"plugins":["./herdr-opencode"],"theme":"system"}"#;
+    let original = r#"{"plugins":["./mercury-opencode"],"theme":"system"}"#;
     fs::write(&config, original).unwrap();
     let alias = base.join("linked-config");
     fs::hard_link(&config, &alias).unwrap();
@@ -2509,7 +2518,7 @@ fn opencode_json_config_validation_precedes_asset_changes() {
         .to_string()
         .contains("plugin list"));
     assert_eq!(fs::read_to_string(&plugin).unwrap(), "previous integration");
-    let original = r#"{"plugin":["./herdr-tui-session.js"]}"#;
+    let original = r#"{"plugin":["./mercury-tui-session.js"]}"#;
     fs::write(&config, original).unwrap();
     let alias = base.join("linked-config");
     fs::hard_link(&config, &alias).unwrap();
@@ -2540,8 +2549,8 @@ fn opencode_recovery_copy_blocks_retry_before_parsing_or_asset_changes() {
     let plugin = dir.join("plugins").join(OPENCODE_PLUGIN_INSTALL_NAME);
     fs::write(&plugin, "previous integration").unwrap();
     let config = dir.join("cli.json");
-    let backup = dir.join("cli.json.herdr-backup");
-    let original = r#"{"plugins":["./herdr-opencode"],"theme":"system"}"#;
+    let backup = dir.join("cli.json.mercury-backup");
+    let original = r#"{"plugins":["./mercury-opencode"],"theme":"system"}"#;
     fs::write(&backup, original).unwrap();
     let target = crate::api::schema::IntegrationTarget::Opencode;
     for contents in [Some("{"), Some(original), None] {
@@ -2555,7 +2564,7 @@ fn opencode_recovery_copy_blocks_retry_before_parsing_or_asset_changes() {
             uninstall_target(target).unwrap_err(),
         ] {
             assert!(error.to_string().contains("recovery copy"), "{error}");
-            assert!(error.to_string().contains("cli.json.herdr-backup"));
+            assert!(error.to_string().contains("cli.json.mercury-backup"));
         }
         assert_eq!(fs::read_to_string(&backup).unwrap(), original);
         if contents.is_none() {
@@ -2565,12 +2574,14 @@ fn opencode_recovery_copy_blocks_retry_before_parsing_or_asset_changes() {
     // A symlink invocation must discover the referent's recovery copy too.
     let referent = base.join("preferences.json");
     fs::write(&referent, "{").unwrap();
-    let linked_backup = base.join("preferences.json.herdr-backup");
+    let linked_backup = base.join("preferences.json.mercury-backup");
     fs::rename(&backup, &linked_backup).unwrap();
     if symlink_file(&referent, &config) {
         let link_before = fs::read_link(&config).unwrap();
         let error = install_target(target).unwrap_err();
-        assert!(error.to_string().contains("preferences.json.herdr-backup"));
+        assert!(error
+            .to_string()
+            .contains("preferences.json.mercury-backup"));
         assert_eq!(fs::read_link(&config).unwrap(), link_before);
     }
     assert_eq!(fs::read_to_string(&plugin).unwrap(), "previous integration");
@@ -2696,7 +2707,7 @@ fn uninstall_opencode_removes_plugins_when_tui_config_is_invalid() {
     let json_path = opencode_dir.join("tui.json");
     fs::write(
         &json_path,
-        r#"{"plugin":["./herdr-tui-session.js","other"]}"#,
+        r#"{"plugin":["./mercury-tui-session.js","other"]}"#,
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -2819,7 +2830,7 @@ fn install_hermes_writes_plugin_and_enables_it() {
     );
     assert_eq!(manifest, HERMES_PLUGIN_MANIFEST_ASSET);
     assert_eq!(init, HERMES_PLUGIN_INIT_ASSET);
-    assert!(config.contains("plugins:\n  enabled:\n    - herdr-agent-state"));
+    assert!(config.contains("plugins:\n  enabled:\n    - mercury-agent-state"));
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -2834,7 +2845,7 @@ fn install_hermes_is_idempotent_for_enabled_entry() {
     fs::create_dir_all(&hermes_dir).unwrap();
     fs::write(
         hermes_dir.join("config.yaml"),
-        "plugins:\n  enabled:\n    - herdr-agent-state\n",
+        "plugins:\n  enabled:\n    - mercury-agent-state\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -2843,7 +2854,7 @@ fn install_hermes_is_idempotent_for_enabled_entry() {
     install_hermes().unwrap();
 
     let config = fs::read_to_string(hermes_dir.join("config.yaml")).unwrap();
-    assert_eq!(config.matches("herdr-agent-state").count(), 1);
+    assert_eq!(config.matches("mercury-agent-state").count(), 1);
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -2868,7 +2879,7 @@ fn install_hermes_preserves_flat_plugin_list() {
     let config = fs::read_to_string(hermes_dir.join("config.yaml")).unwrap();
     assert_eq!(
         config,
-        "plugins:\n  - herdr-agent-state\n  - platforms/discord\n"
+        "plugins:\n  - mercury-agent-state\n  - platforms/discord\n"
     );
 
     std::env::remove_var("HOME");
@@ -2894,7 +2905,7 @@ fn install_hermes_converts_flow_plugin_list_to_block_list() {
     let config = fs::read_to_string(hermes_dir.join("config.yaml")).unwrap();
     assert_eq!(
         config,
-        "plugins:\n  - herdr-agent-state\n  - platforms/discord\n"
+        "plugins:\n  - mercury-agent-state\n  - platforms/discord\n"
     );
 
     std::env::remove_var("HOME");
@@ -2906,7 +2917,7 @@ fn install_hermes_converts_inline_enabled_list_to_block_list() {
     let config = update_hermes_enabled_plugin("plugins:\n  enabled: [example-plugin]\n", true);
     assert_eq!(
         config,
-        "plugins:\n  enabled:\n    - herdr-agent-state\n    - example-plugin\n"
+        "plugins:\n  enabled:\n    - mercury-agent-state\n    - example-plugin\n"
     );
 }
 
@@ -2916,7 +2927,7 @@ fn install_hermes_preserves_quoted_inline_enabled_items() {
         update_hermes_enabled_plugin("plugins:\n  enabled: [\"null\", 'foo: bar']\n", true);
     assert_eq!(
         config,
-        "plugins:\n  enabled:\n    - herdr-agent-state\n    - \"null\"\n    - 'foo: bar'\n"
+        "plugins:\n  enabled:\n    - mercury-agent-state\n    - \"null\"\n    - 'foo: bar'\n"
     );
 }
 
@@ -2928,7 +2939,7 @@ fn install_hermes_preserves_inline_enabled_comment() {
     );
     assert_eq!(
         config,
-        "plugins:\n  enabled: # managed locally\n    - herdr-agent-state\n    - example-plugin\n"
+        "plugins:\n  enabled: # managed locally\n    - mercury-agent-state\n    - example-plugin\n"
     );
 }
 
@@ -2938,19 +2949,19 @@ fn install_hermes_preserves_inline_plugins_comment() {
         update_hermes_enabled_plugin("plugins: [platforms/discord] # managed locally\n", true);
     assert_eq!(
         config,
-        "plugins: # managed locally\n  - herdr-agent-state\n  - platforms/discord\n"
+        "plugins: # managed locally\n  - mercury-agent-state\n  - platforms/discord\n"
     );
 }
 
 #[test]
 fn install_hermes_is_idempotent_for_inline_enabled_list_entry() {
     let config = update_hermes_enabled_plugin(
-        "plugins:\n  enabled: [herdr-agent-state, example-plugin]\n",
+        "plugins:\n  enabled: [mercury-agent-state, example-plugin]\n",
         true,
     );
     assert_eq!(
         config,
-        "plugins:\n  enabled: [herdr-agent-state, example-plugin]\n"
+        "plugins:\n  enabled: [mercury-agent-state, example-plugin]\n"
     );
 }
 
@@ -2963,7 +2974,7 @@ fn install_hermes_is_idempotent_for_quoted_flat_plugin_entry() {
     fs::create_dir_all(&hermes_dir).unwrap();
     fs::write(
         hermes_dir.join("config.yaml"),
-        "plugins:\n  - \"herdr-agent-state\" # installed by herdr\n",
+        "plugins:\n  - \"mercury-agent-state\" # installed by mercury\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -2973,7 +2984,7 @@ fn install_hermes_is_idempotent_for_quoted_flat_plugin_entry() {
     let config = fs::read_to_string(hermes_dir.join("config.yaml")).unwrap();
     assert_eq!(
         config,
-        "plugins:\n  - \"herdr-agent-state\" # installed by herdr\n"
+        "plugins:\n  - \"mercury-agent-state\" # installed by mercury\n"
     );
 
     std::env::remove_var("HOME");
@@ -2995,7 +3006,7 @@ fn uninstall_hermes_removes_plugin_and_enabled_entry() {
     .unwrap();
     fs::write(
         hermes_dir.join("config.yaml"),
-        "plugins:\n  enabled:\n    - other-plugin\n    - herdr-agent-state\n",
+        "plugins:\n  enabled:\n    - other-plugin\n    - mercury-agent-state\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -3007,7 +3018,7 @@ fn uninstall_hermes_removes_plugin_and_enabled_entry() {
     assert!(result.updated_config);
     assert!(!plugin_dir.exists());
     assert!(config.contains("    - other-plugin"));
-    assert!(!config.contains("herdr-agent-state"));
+    assert!(!config.contains("mercury-agent-state"));
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -3028,7 +3039,7 @@ fn uninstall_hermes_preserves_flat_plugin_list() {
     .unwrap();
     fs::write(
         hermes_dir.join("config.yaml"),
-        "plugins:\n  - other-plugin\n  - herdr-agent-state\n",
+        "plugins:\n  - other-plugin\n  - mercury-agent-state\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -3059,7 +3070,7 @@ fn uninstall_hermes_removes_flow_plugin_list_entry() {
     .unwrap();
     fs::write(
         hermes_dir.join("config.yaml"),
-        "plugins: [other-plugin, herdr-agent-state]\n",
+        "plugins: [other-plugin, mercury-agent-state]\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -3078,7 +3089,7 @@ fn uninstall_hermes_removes_flow_plugin_list_entry() {
 #[test]
 fn uninstall_hermes_removes_inline_enabled_list_entry() {
     let config = update_hermes_enabled_plugin(
-        "plugins:\n  enabled: [example-plugin, herdr-agent-state]\n",
+        "plugins:\n  enabled: [example-plugin, mercury-agent-state]\n",
         false,
     );
     assert_eq!(config, "plugins:\n  enabled:\n    - example-plugin\n");
@@ -3087,7 +3098,7 @@ fn uninstall_hermes_removes_inline_enabled_list_entry() {
 #[test]
 fn uninstall_hermes_preserves_quoted_inline_enabled_items() {
     let config = update_hermes_enabled_plugin(
-        "plugins:\n  enabled: ['foo: bar', herdr-agent-state]\n",
+        "plugins:\n  enabled: ['foo: bar', mercury-agent-state]\n",
         false,
     );
     assert_eq!(config, "plugins:\n  enabled:\n    - 'foo: bar'\n");
@@ -3095,7 +3106,8 @@ fn uninstall_hermes_preserves_quoted_inline_enabled_items() {
 
 #[test]
 fn uninstall_hermes_converts_single_inline_enabled_entry_to_empty_list() {
-    let config = update_hermes_enabled_plugin("plugins:\n  enabled: [herdr-agent-state]\n", false);
+    let config =
+        update_hermes_enabled_plugin("plugins:\n  enabled: [mercury-agent-state]\n", false);
     assert_eq!(config, "plugins:\n  enabled: []\n");
 }
 
@@ -3114,7 +3126,7 @@ fn uninstall_hermes_removes_commented_flat_plugin_entry() {
     .unwrap();
     fs::write(
         hermes_dir.join("config.yaml"),
-        "plugins:\n  - other-plugin\n  - herdr-agent-state # installed by herdr\n",
+        "plugins:\n  - other-plugin\n  - mercury-agent-state # installed by mercury\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -3456,7 +3468,7 @@ fn install_qodercli_is_idempotent_for_hook_entries() {
 }
 
 #[test]
-fn uninstall_qodercli_removes_herdr_hooks_and_preserves_others() {
+fn uninstall_qodercli_removes_mercury_hooks_and_preserves_others() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let qoder_dir = base.join(".qoder");
@@ -3548,9 +3560,9 @@ fn install_qwen_writes_session_hook_and_preserves_settings() {
     assert!(command.ends_with("session"));
     assert!(settings.get("permissions").is_some());
     let hook_asset = fs::read_to_string(&installed.hook_path).unwrap();
-    assert!(hook_asset.contains("HERDR_INTEGRATION_ID=qwen"));
-    assert!(hook_asset.contains("HERDR_INTEGRATION_VERSION=1"));
-    assert!(hook_asset.contains("herdr:qwen"));
+    assert!(hook_asset.contains("MERCURY_INTEGRATION_ID=qwen"));
+    assert!(hook_asset.contains("MERCURY_INTEGRATION_VERSION=1"));
+    assert!(hook_asset.contains("mercury:qwen"));
 
     install_qwen().unwrap();
     let settings: Value =
@@ -3565,7 +3577,7 @@ fn install_qwen_writes_session_hook_and_preserves_settings() {
 }
 
 #[test]
-fn uninstall_qwen_removes_only_herdr_hook() {
+fn uninstall_qwen_removes_only_mercury_hook() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let qwen_dir = base.join(".qwen");
@@ -3690,26 +3702,26 @@ fn letta_session_hook_is_silent_and_encodes_default_conversation() {
     let installed = install_letta().unwrap();
 
     let capture = base.join("args.txt");
-    let fake_herdr = base.join("herdr");
+    let fake_mercury = base.join("mercury");
     fs::write(
-        &fake_herdr,
+        &fake_mercury,
         format!(
             "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}'\n",
             capture.display()
         ),
     )
     .unwrap();
-    let mut permissions = fs::metadata(&fake_herdr).unwrap().permissions();
+    let mut permissions = fs::metadata(&fake_mercury).unwrap().permissions();
     permissions.set_mode(0o755);
-    fs::set_permissions(&fake_herdr, permissions).unwrap();
+    fs::set_permissions(&fake_mercury, permissions).unwrap();
 
     let mut child = Command::new("sh")
         .arg(&installed.hook_path)
         .arg("session")
-        .env("HERDR_ENV", "1")
-        .env("HERDR_PANE_ID", "w1:p2")
-        .env("HERDR_SOCKET_PATH", "/tmp/herdr.sock")
-        .env("HERDR_BIN_PATH", &fake_herdr)
+        .env("MERCURY_ENV", "1")
+        .env("MERCURY_PANE_ID", "w1:p2")
+        .env("MERCURY_SOCKET_PATH", "/tmp/mercury.sock")
+        .env("MERCURY_BIN_PATH", &fake_mercury)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -3729,7 +3741,7 @@ fn letta_session_hook_is_silent_and_encodes_default_conversation() {
     assert!(output.stderr.is_empty());
     let args = fs::read_to_string(capture).unwrap();
     assert!(args.contains("report-agent-session w1:p2"));
-    assert!(args.contains("--source herdr:letta --agent letta"));
+    assert!(args.contains("--source mercury:letta --agent letta"));
     assert!(args.contains("--agent-session-id default:agent-123"));
     assert!(args.contains("--session-start-source resume"));
 
@@ -3874,7 +3886,7 @@ fn install_cursor_is_idempotent_for_hook_entries() {
 }
 
 #[test]
-fn uninstall_cursor_removes_herdr_hooks_and_preserves_others() {
+fn uninstall_cursor_removes_mercury_hooks_and_preserves_others() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let cursor_dir = base.join(".cursor");
@@ -3935,7 +3947,7 @@ fn cursor_v1_integration_status_is_current() {
     let hook_path = cursor_dir.join(CURSOR_HOOK_INSTALL_NAME);
     fs::write(
         &hook_path,
-        "#!/bin/sh\n# HERDR_INTEGRATION_ID=cursor\n# HERDR_INTEGRATION_VERSION=1\n",
+        "#!/bin/sh\n# MERCURY_INTEGRATION_ID=cursor\n# MERCURY_INTEGRATION_VERSION=1\n",
     )
     .unwrap();
     std::env::set_var(CURSOR_CONFIG_DIR_ENV_VAR, &cursor_dir);
@@ -4003,7 +4015,7 @@ fn install_mastracode_writes_hook_and_updates_hooks_json() {
     let hooks = hooks_file.as_object().unwrap();
     for (event, action) in MASTRACODE_HOOK_EVENTS {
         let entries = hooks.get(event).and_then(Value::as_array).unwrap();
-        assert_eq!(entries.len(), 1, "{event} should have one Herdr hook");
+        assert_eq!(entries.len(), 1, "{event} should have one Mercury hook");
         let command = entries[0].get("command").and_then(Value::as_str).unwrap();
         assert_eq!(
             command,
@@ -4072,7 +4084,7 @@ fn install_grok_writes_hook_and_config() {
     #[cfg(not(windows))]
     {
         assert!(command.starts_with("sh "));
-        assert!(command.contains("herdr-agent-state.sh"));
+        assert!(command.contains("mercury-agent-state.sh"));
         assert!(command.ends_with(" session"));
     }
 
@@ -4179,7 +4191,7 @@ fn install_grok_is_idempotent() {
 }
 
 #[test]
-fn uninstall_mastracode_removes_herdr_hooks_and_preserves_others() {
+fn uninstall_mastracode_removes_mercury_hooks_and_preserves_others() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let original_home = std::env::var_os("HOME");
@@ -4379,7 +4391,7 @@ fn install_antigravity_cli_writes_hook_and_updates_hooks_json() {
         serde_json::from_str(&fs::read_to_string(agy_dir.join("hooks.json")).unwrap()).unwrap();
     let hooks = hooks_file.as_object().unwrap();
 
-    // Herdr entries live under a named hook block; Antigravity CLI rejects a
+    // Mercury entries live under a named hook block; Antigravity CLI rejects a
     // file whose top level maps event names straight to arrays.
     let block = hooks
         .get(ANTIGRAVITY_CLI_HOOK_BLOCK_NAME)
@@ -4388,7 +4400,7 @@ fn install_antigravity_cli_writes_hook_and_updates_hooks_json() {
 
     for (event, action) in ANTIGRAVITY_CLI_HOOK_EVENTS {
         let entries = block.get(event).and_then(Value::as_array).unwrap();
-        assert_eq!(entries.len(), 1, "{event} should hold one Herdr entry");
+        assert_eq!(entries.len(), 1, "{event} should hold one Mercury entry");
         let handler = &entries[0];
 
         // Handlers must be a flat list; the matcher/hooks wrapper is only
@@ -4412,7 +4424,7 @@ fn install_antigravity_cli_writes_hook_and_updates_hooks_json() {
 
     // The integration is session-only. Antigravity CLI cannot express blocked
     // state, skips PostInvocation on interruption, and fires Stop at end of
-    // turn rather than process exit, so Herdr never claims lifecycle authority
+    // turn rather than process exit, so Mercury never claims lifecycle authority
     // here and screen detection owns agent state.
     for event in ["PreToolUse", "PostToolUse", "PostInvocation", "Stop"] {
         assert!(
@@ -4446,8 +4458,10 @@ fn antigravity_cli_v2_install_is_outdated_until_reinstalled() {
     fs::create_dir_all(&hook_dir).unwrap();
     fs::write(
         hook_dir.join(ANTIGRAVITY_CLI_HOOK_INSTALL_NAME),
-        ANTIGRAVITY_CLI_HOOK_ASSET
-            .replace("HERDR_INTEGRATION_VERSION=3", "HERDR_INTEGRATION_VERSION=2"),
+        ANTIGRAVITY_CLI_HOOK_ASSET.replace(
+            "MERCURY_INTEGRATION_VERSION=3",
+            "MERCURY_INTEGRATION_VERSION=2",
+        ),
     )
     .unwrap();
     std::env::set_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR, &agy_dir);
@@ -4471,16 +4485,16 @@ fn antigravity_cli_v2_install_is_outdated_until_reinstalled() {
 }
 
 #[test]
-fn install_antigravity_cli_rewrites_stale_herdr_block() {
+fn install_antigravity_cli_rewrites_stale_mercury_block() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let agy_dir = base.join(".gemini").join("config");
     fs::create_dir_all(&agy_dir).unwrap();
-    // An older Herdr install claimed lifecycle authority, wrapped events in
+    // An older Mercury install claimed lifecycle authority, wrapped events in
     // matcher/hooks, and left entries Antigravity CLI now rejects.
     fs::write(
         agy_dir.join("hooks.json"),
-        r#"{"herdr":{"Stop":[{"matcher":"*","hooks":[{"type":"command","command":"stale"}]}],"PostInvocation":[{"type":"command","command":"stale idle"}],"Legacy":[]}}"#,
+        r#"{"mercury":{"Stop":[{"matcher":"*","hooks":[{"type":"command","command":"stale"}]}],"PostInvocation":[{"type":"command","command":"stale idle"}],"Legacy":[]}}"#,
     )
     .unwrap();
     std::env::set_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR, &agy_dir);
@@ -4494,7 +4508,7 @@ fn install_antigravity_cli_rewrites_stale_herdr_block() {
         .and_then(Value::as_object)
         .unwrap();
 
-    // The block is Herdr-owned and rewritten wholesale, so a stale lifecycle
+    // The block is Mercury-owned and rewritten wholesale, so a stale lifecycle
     // install is migrated to session-only rather than merged with.
     assert_eq!(
         block.keys().map(String::as_str).collect::<Vec<_>>(),
@@ -4542,7 +4556,7 @@ fn grok_v1_integration_status_is_outdated() {
     let hook_path = hooks_dir.join(GROK_HOOK_INSTALL_NAME);
     fs::write(
         &hook_path,
-        "#!/bin/sh\n# HERDR_INTEGRATION_ID=grok\n# HERDR_INTEGRATION_VERSION=1\n",
+        "#!/bin/sh\n# MERCURY_INTEGRATION_ID=grok\n# MERCURY_INTEGRATION_VERSION=1\n",
     )
     .unwrap();
     fs::write(
@@ -4570,7 +4584,7 @@ fn grok_v2_integration_status_is_current() {
     let grok_dir = base.join(".grok");
     fs::create_dir_all(&grok_dir).unwrap();
     std::env::set_var(GROK_CONFIG_DIR_ENV_VAR, &grok_dir);
-    // A real install writes both the hook script and hooks/herdr.json.
+    // A real install writes both the hook script and hooks/mercury.json.
     install_grok().unwrap();
 
     let statuses = installed_integration_statuses();
@@ -4624,7 +4638,7 @@ fn grok_status_reports_outdated_when_hook_config_missing_or_broken() {
     // nonfunctional, so neither may report current.
     fs::write(
         &config_path,
-        r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo herdr-agent-state.sh"}]}]}}"#,
+        r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo mercury-agent-state.sh"}]}]}}"#,
     )
     .unwrap();
     assert_eq!(grok_state(), IntegrationStatusKind::Outdated);
@@ -4701,7 +4715,7 @@ fn uninstall_antigravity_cli_removes_hooks_json_entries_and_hook_file() {
         serde_json::from_str(&fs::read_to_string(agy_dir.join("hooks.json")).unwrap()).unwrap();
     let hooks = hooks_file.as_object().unwrap();
 
-    // The Herdr block is gone and unrelated named hooks survive.
+    // The Mercury block is gone and unrelated named hooks survive.
     assert!(hooks.get(ANTIGRAVITY_CLI_HOOK_BLOCK_NAME).is_none());
     assert!(hooks.contains_key("lint-checker"));
 
@@ -4726,7 +4740,7 @@ fn grok_dir_honors_grok_home_after_config_dir_seam() {
         home_dir.join("hooks").join(GROK_HOOK_INSTALL_NAME)
     );
 
-    // The herdr-level test seam still wins over GROK_HOME when set.
+    // The mercury-level test seam still wins over GROK_HOME when set.
     let seam_dir = base.join("seam");
     fs::create_dir_all(&seam_dir).unwrap();
     std::env::set_var(GROK_CONFIG_DIR_ENV_VAR, &seam_dir);

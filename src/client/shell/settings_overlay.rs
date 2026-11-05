@@ -131,7 +131,8 @@ pub(super) fn render_settings_overlay(
         ClientSettingsSection::Theme => {
             let visible = usize::from(content.height);
             let scroll = settings.selected.saturating_sub(visible.saturating_sub(1));
-            for (visible_index, (index, name)) in crate::config::THEME_NAMES
+            for (visible_index, (index, name)) in settings
+                .theme_names
                 .iter()
                 .enumerate()
                 .skip(scroll)
@@ -188,7 +189,7 @@ pub(super) fn render_settings_overlay(
                 content,
                 "notification popups",
                 "choose where background popup notifications should appear",
-                &["off", "inside herdr", "via terminal", "via system"],
+                &["off", "inside mercury", "via terminal", "via system"],
                 settings.selected,
                 palette,
                 &mut choice_hits,

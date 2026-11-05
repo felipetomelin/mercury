@@ -1,11 +1,19 @@
 # Mercury
 
-Terminal agent controller for Claude Code + Codex CLI. Codebase starts from Herdr v0.9.3 (Rust) and is modified freely. The plan, decisions and phases live in `PLAN.md` — read it before starting work. Herdr's original contributor notes are in `docs/herdr-base/` for reference only; their release/contribution rules do not apply here.
+Terminal agent controller for Claude Code + Codex CLI, written in Rust, modified freely with no obligation to any upstream project. The plan, decisions and phases live in `PLAN.md` — read it before starting work.
 
 ## Build
 
 - Rust toolchain pinned in `rust-toolchain.toml` (1.96.1); Zig 0.16.0 on `PATH` for `crates/ghostty-vt`.
 - `cargo build`, `cargo test`, `cargo clippy`.
+
+## Project validation policy
+
+User decision, 2026-10-29: external SonarQube/Veracode/Wiz gates and quantitative
+coverage are waived for Mercury, including subsequent work, until revoked.
+Record them as waived/not executed, not passing. Local review, relevant tests,
+build, Clippy, formatting and maintenance checks remain required. See
+`.specify/memory/constitution.md` for the scope, accepted risk and source.
 
 ## Model routing for development
 

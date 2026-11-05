@@ -212,6 +212,22 @@ impl App {
                 submit_deadline,
             )
             .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
+        if id == "cron:pane" {
+            let provider = match expected_agent {
+                crate::detect::Agent::Claude => Some(mercury_learn::transcript::Provider::Claude),
+                crate::detect::Agent::Codex => Some(mercury_learn::transcript::Provider::Codex),
+                _ => None,
+            };
+            if let Some(provider) = provider {
+                let key = (resolved.pane_id, provider);
+                let session_id = self
+                    .learn_transcripts
+                    .get(&key)
+                    .map_or("*", |observed| observed.session_id.as_str());
+                self.learn_excluded_sessions
+                    .insert(key, session_id.to_owned());
+            }
+        }
         Ok((id, agent, completion))
     }
 
@@ -437,6 +453,45 @@ mod tests {
         start_deferred_agent_prompt(app, id, params)
             .recv_timeout(Duration::from_secs(1))
             .expect("agent prompt responds after submission")
+    }
+
+    #[tokio::test]
+    async fn cron_pane_prompt_excludes_current_codex_session_from_learn() {
+        let mut app = app_with_agent();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_detected_state(Some(Agent::Codex), AgentState::Working);
+        let (runtime, _rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        app.state.insert_test_runtime(pane_id, runtime);
+        let provider = mercury_learn::transcript::Provider::Codex;
+        app.learn_transcripts.insert(
+            (pane_id, provider),
+            crate::app::learn::ObservedTranscript {
+                session_id: "session-1".into(),
+                path: std::path::PathBuf::from("/tmp/rollout.jsonl"),
+                accepted_at: std::time::Instant::now(),
+            },
+        );
+        let public_pane_id = app.public_pane_id(0, pane_id).unwrap();
+        let _response = start_deferred_agent_prompt(
+            &mut app,
+            "cron:pane",
+            AgentPromptParams {
+                target: public_pane_id,
+                text: "synthetic cron prompt".into(),
+                wait: None,
+            },
+        );
+        assert_eq!(
+            app.learn_excluded_sessions.get(&(pane_id, provider)),
+            Some(&"session-1".to_string())
+        );
     }
 
     #[cfg(windows)]

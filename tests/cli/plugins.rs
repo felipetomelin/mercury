@@ -13,9 +13,9 @@ fn named_sessions_share_live_plugin_registry() {
     ] {
         fs::create_dir_all(dir).unwrap();
         fs::write(
-            dir.join("herdr-plugin.toml"),
+            dir.join("mercury-plugin.toml"),
             format!(
-                "id = \"{id}\"\nname = \"{id}\"\nversion = \"0.1.0\"\nmin_herdr_version = \"0.6.10\"\n\n[[actions]]\nid = \"run\"\ntitle = \"Run\"\ncommand = [\"sh\", \"-c\", \"echo run\"]\n"
+                "id = \"{id}\"\nname = \"{id}\"\nversion = \"0.1.0\"\nmin_mercury_version = \"0.6.10\"\n\n[[actions]]\nid = \"run\"\ntitle = \"Run\"\ncommand = [\"sh\", \"-c\", \"echo run\"]\n"
             ),
         )
         .unwrap();
@@ -119,12 +119,12 @@ fn plugin_link_works_offline_and_is_global() {
     let plugin_dir = base.join("plugins").join("offline");
     fs::create_dir_all(&plugin_dir).unwrap();
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
+        plugin_dir.join("mercury-plugin.toml"),
         r#"
 id = "example.offline"
 name = "Offline Plugin"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_mercury_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 "#,
     )
@@ -178,17 +178,17 @@ fn plugin_install_through_named_server_is_global() {
     fs::create_dir_all(&plugin_dir).unwrap();
     create_committed_repo(&source_repo);
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
+        plugin_dir.join("mercury-plugin.toml"),
         r#"
 id = "example.global-plugin"
 name = "Global Plugin"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_mercury_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 "#,
     )
     .unwrap();
-    run_git(&source_repo, &["add", "global-plugin/herdr-plugin.toml"]);
+    run_git(&source_repo, &["add", "global-plugin/mercury-plugin.toml"]);
     run_git(&source_repo, &["commit", "--quiet", "-m", "add plugin"]);
 
     let git_config = base.join("gitconfig");
@@ -252,17 +252,17 @@ fn plugin_link_list_unlink_cli_smoke_test() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("mercury.sock");
     let plugin_dir = base.join("plugins").join("layout");
     fs::create_dir_all(&plugin_dir).unwrap();
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
+        plugin_dir.join("mercury-plugin.toml"),
         r#"
 id = "example.layout"
 name = "Layout"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
-description = "Apply a preferred Herdr layout"
+min_mercury_version = "0.6.10"
+description = "Apply a preferred Mercury layout"
 
 [[actions]]
 id = "apply"
@@ -283,7 +283,7 @@ command = ["sh", "-c", "sleep 5"]
     )
     .unwrap();
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let mercury = spawn_mercury(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
     let workspace = run_cli_json(
         &socket_path,
@@ -358,7 +358,7 @@ command = ["sh", "-c", "sleep 5"]
             "--entrypoint",
             "board",
             "--env",
-            "HERDR_ROLE=board",
+            "MERCURY_ROLE=board",
             "--no-focus",
         ],
     );
@@ -384,7 +384,7 @@ command = ["sh", "-c", "sleep 5"]
     let listed = run_cli_json(&socket_path, &["plugin", "list", "--json"]);
     assert!(listed["result"]["plugins"].as_array().unwrap().is_empty());
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_mercury(mercury, base);
 }
 
 #[test]
@@ -407,10 +407,10 @@ fn plugin_install_usage_errors_include_options_without_installing() {
         );
         assert_eq!(output.status.code(), Some(2), "{args:?}");
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("usage: herdr plugin install"), "{stderr}");
+        assert!(stderr.contains("usage: mercury plugin install"), "{stderr}");
         assert!(stderr.contains("[--ref REF] [--yes|-y]"), "{stderr}");
-        assert!(!config_home.join("herdr-dev/plugins").exists());
-        assert!(!config_home.join("herdr-dev/plugins.json").exists());
+        assert!(!config_home.join("mercury-dev/plugins").exists());
+        assert!(!config_home.join("mercury-dev/plugins.json").exists());
         assert!(!state_home.exists());
     }
 
@@ -427,16 +427,16 @@ fn plugin_install_list_uninstall_offline_cli_smoke_test() {
     fs::create_dir_all(&plugin_dir).unwrap();
     create_committed_repo(&source_repo);
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
+        plugin_dir.join("mercury-plugin.toml"),
         r#"
 id = "example.worktree-bootstrap"
 name = "Worktree Bootstrap"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_mercury_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
-command = ["sh", "-c", "echo built > built.txt; if [ -n \"$HERDR_SESSION\" ]; then echo \"$HERDR_SESSION\" > leaked-session.txt; fi"]
+command = ["sh", "-c", "echo built > built.txt; if [ -n \"$MERCURY_SESSION\" ]; then echo \"$MERCURY_SESSION\" > leaked-session.txt; fi"]
 
 [[actions]]
 id = "bootstrap"
@@ -447,7 +447,7 @@ command = ["sh", "-c", "echo bootstrap"]
     .unwrap();
     run_git(
         &source_repo,
-        &["add", "worktree-bootstrap/herdr-plugin.toml"],
+        &["add", "worktree-bootstrap/mercury-plugin.toml"],
     );
     run_git(&source_repo, &["commit", "--quiet", "-m", "add plugin"]);
 
@@ -457,7 +457,7 @@ command = ["sh", "-c", "echo bootstrap"]
     fs::write(
         &git_config,
         format!(
-            "[url \"file://{}\"]\n    insteadOf = https://github.com/ogulcancelik/herdr-plugin-examples.git\n",
+            "[url \"file://{}\"]\n    insteadOf = https://github.com/ogulcancelik/mercury-plugin-examples.git\n",
             source_repo.display()
         ),
     )
@@ -475,12 +475,12 @@ command = ["sh", "-c", "echo bootstrap"]
             "--yes",
             "--ref",
             "v0.43.0",
-            "ogulcancelik/herdr-plugin-examples/worktree-bootstrap",
+            "ogulcancelik/mercury-plugin-examples/worktree-bootstrap",
         ],
         &[
             ("GIT_CONFIG_GLOBAL", &git_config),
             ("XDG_STATE_HOME", &base.join("state")),
-            ("HERDR_SESSION", Path::new("leaked-session")),
+            ("MERCURY_SESSION", Path::new("leaked-session")),
         ],
     );
     assert!(
@@ -499,7 +499,7 @@ command = ["sh", "-c", "echo bootstrap"]
     assert_eq!(plugin["plugin_id"], "example.worktree-bootstrap");
     assert_eq!(plugin["source"]["kind"], "github");
     assert_eq!(plugin["source"]["owner"], "ogulcancelik");
-    assert_eq!(plugin["source"]["repo"], "herdr-plugin-examples");
+    assert_eq!(plugin["source"]["repo"], "mercury-plugin-examples");
     assert_eq!(plugin["source"]["subdir"], "worktree-bootstrap");
     assert_eq!(plugin["source"]["requested_ref"], "v0.43.0");
     assert!(plugin["source"]["resolved_commit"].as_str().is_some());
@@ -518,7 +518,7 @@ command = ["sh", "-c", "echo bootstrap"]
             .join("worktree-bootstrap")
             .join("leaked-session.txt")
             .exists(),
-        "build command should not inherit HERDR_SESSION"
+        "build command should not inherit MERCURY_SESSION"
     );
 
     let uninstall = run_named_cli(
@@ -563,12 +563,12 @@ fn plugin_install_build_failure_does_not_register_or_create_checkout() {
     fs::create_dir_all(&plugin_dir).unwrap();
     create_committed_repo(&source_repo);
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
+        plugin_dir.join("mercury-plugin.toml"),
         r#"
 id = "example.build-fail"
 name = "Build Fail"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_mercury_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
@@ -581,7 +581,7 @@ command = ["sh", "-c", "echo should-not-install"]
 "#,
     )
     .unwrap();
-    run_git(&source_repo, &["add", "build-fail/herdr-plugin.toml"]);
+    run_git(&source_repo, &["add", "build-fail/mercury-plugin.toml"]);
     run_git(
         &source_repo,
         &["commit", "--quiet", "-m", "add failing plugin"],
@@ -593,7 +593,7 @@ command = ["sh", "-c", "echo should-not-install"]
     fs::write(
         &git_config,
         format!(
-            "[url \"file://{}\"]\n    insteadOf = https://github.com/ogulcancelik/herdr-plugin-examples.git\n",
+            "[url \"file://{}\"]\n    insteadOf = https://github.com/ogulcancelik/mercury-plugin-examples.git\n",
             source_repo.display()
         ),
     )
@@ -607,7 +607,7 @@ command = ["sh", "-c", "echo should-not-install"]
             "plugins",
             "plugin",
             "install",
-            "ogulcancelik/herdr-plugin-examples/build-fail",
+            "ogulcancelik/mercury-plugin-examples/build-fail",
             "--yes",
         ],
         &[("GIT_CONFIG_GLOBAL", &git_config)],
@@ -657,16 +657,16 @@ fn plugin_install_build_spawn_failure_prints_clean_error() {
     fs::create_dir_all(&plugin_dir).unwrap();
     create_committed_repo(&source_repo);
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
+        plugin_dir.join("mercury-plugin.toml"),
         r#"
 id = "example.missing-tool"
 name = "Missing Tool"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_mercury_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
-command = ["definitely-missing-herdr-build-tool-xyz"]
+command = ["definitely-missing-mercury-build-tool-xyz"]
 
 [[actions]]
 id = "run"
@@ -675,7 +675,7 @@ command = ["sh", "-c", "echo should-not-install"]
 "#,
     )
     .unwrap();
-    run_git(&source_repo, &["add", "missing-tool/herdr-plugin.toml"]);
+    run_git(&source_repo, &["add", "missing-tool/mercury-plugin.toml"]);
     run_git(
         &source_repo,
         &["commit", "--quiet", "-m", "add missing tool plugin"],
@@ -687,7 +687,7 @@ command = ["sh", "-c", "echo should-not-install"]
     fs::write(
         &git_config,
         format!(
-            "[url \"file://{}\"]\n    insteadOf = https://github.com/ogulcancelik/herdr-plugin-examples.git\n",
+            "[url \"file://{}\"]\n    insteadOf = https://github.com/ogulcancelik/mercury-plugin-examples.git\n",
             source_repo.display()
         ),
     )
@@ -701,7 +701,7 @@ command = ["sh", "-c", "echo should-not-install"]
             "plugins",
             "plugin",
             "install",
-            "ogulcancelik/herdr-plugin-examples/missing-tool",
+            "ogulcancelik/mercury-plugin-examples/missing-tool",
             "--yes",
         ],
         &[("GIT_CONFIG_GLOBAL", &git_config)],
@@ -719,7 +719,7 @@ command = ["sh", "-c", "echo should-not-install"]
     );
     assert!(stderr.contains("  build: 1/1"), "{stderr}");
     assert!(
-        stderr.contains("  command: definitely-missing-herdr-build-tool-xyz"),
+        stderr.contains("  command: definitely-missing-mercury-build-tool-xyz"),
         "{stderr}"
     );
     assert!(stderr.contains("  error: failed to start:"), "{stderr}");
@@ -746,12 +746,12 @@ fn plugin_install_rejects_manifest_changed_by_build() {
     fs::create_dir_all(&plugin_dir).unwrap();
     create_committed_repo(&source_repo);
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
+        plugin_dir.join("mercury-plugin.toml"),
         r#"
 id = "example.manifest-mutator"
 name = "Manifest Mutator"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_mercury_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
@@ -766,11 +766,11 @@ command = ["sh", "-c", "echo reviewed"]
     .unwrap();
     fs::write(
         plugin_dir.join("mutate.sh"),
-        r#"cat > herdr-plugin.toml <<'EOF'
+        r#"cat > mercury-plugin.toml <<'EOF'
 id = "example.manifest-mutator"
 name = "Manifest Mutator"
 version = "0.1.0"
-min_herdr_version = "0.0.1"
+min_mercury_version = "0.0.1"
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
@@ -796,7 +796,7 @@ EOF
     fs::write(
         &git_config,
         format!(
-            "[url \"file://{}\"]\n    insteadOf = https://github.com/ogulcancelik/herdr-plugin-examples.git\n",
+            "[url \"file://{}\"]\n    insteadOf = https://github.com/ogulcancelik/mercury-plugin-examples.git\n",
             source_repo.display()
         ),
     )
@@ -810,7 +810,7 @@ EOF
             "plugins",
             "plugin",
             "install",
-            "ogulcancelik/herdr-plugin-examples/manifest-mutator",
+            "ogulcancelik/mercury-plugin-examples/manifest-mutator",
             "--yes",
         ],
         &[("GIT_CONFIG_GLOBAL", &git_config)],
@@ -821,7 +821,7 @@ EOF
     );
     let stderr = String::from_utf8_lossy(&install.stderr);
     assert!(
-        stderr.contains("plugin build changed herdr-plugin.toml after install preview"),
+        stderr.contains("plugin build changed mercury-plugin.toml after install preview"),
         "{stderr}"
     );
 
@@ -845,18 +845,18 @@ fn plugin_install_restores_previous_checkout_when_registration_fails() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("fake-herdr.sock");
+    let socket_path = runtime_dir.join("fake-mercury.sock");
     let source_repo = base.join("source-repo");
     let plugin_dir = source_repo.join("worktree-bootstrap");
     fs::create_dir_all(&plugin_dir).unwrap();
     create_committed_repo(&source_repo);
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
+        plugin_dir.join("mercury-plugin.toml"),
         r#"
 id = "example.worktree-bootstrap"
 name = "Worktree Bootstrap"
 version = "0.2.0"
-min_herdr_version = "0.6.10"
+min_mercury_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
@@ -868,14 +868,14 @@ command = ["sh", "-c", "echo new"]
     .unwrap();
     run_git(
         &source_repo,
-        &["add", "worktree-bootstrap/herdr-plugin.toml"],
+        &["add", "worktree-bootstrap/mercury-plugin.toml"],
     );
     run_git(&source_repo, &["commit", "--quiet", "-m", "add plugin"]);
 
     fs::create_dir_all(&config_home).unwrap();
     fs::create_dir_all(&runtime_dir).unwrap();
     let managed_checkout = config_home
-        .join("herdr-dev")
+        .join("mercury-dev")
         .join("plugins")
         .join("github")
         .join(WORKTREE_BOOTSTRAP_MANAGED_COMPONENT);
@@ -886,7 +886,7 @@ command = ["sh", "-c", "echo new"]
     fs::write(
         &git_config,
         format!(
-            "[url \"file://{}\"]\n    insteadOf = https://github.com/ogulcancelik/herdr-plugin-examples.git\n",
+            "[url \"file://{}\"]\n    insteadOf = https://github.com/ogulcancelik/mercury-plugin-examples.git\n",
             source_repo.display()
         ),
     )
@@ -909,14 +909,14 @@ command = ["sh", "-c", "echo new"]
                         "plugin_id": "example.worktree-bootstrap",
                         "name": "Worktree Bootstrap",
                         "version": "0.1.0",
-                        "min_herdr_version": "0.6.10",
-                        "manifest_path": managed_checkout_for_server.join("herdr-plugin.toml").display().to_string(),
+                        "min_mercury_version": "0.6.10",
+                        "manifest_path": managed_checkout_for_server.join("mercury-plugin.toml").display().to_string(),
                         "plugin_root": managed_checkout_for_server.display().to_string(),
                         "enabled": true,
                         "source": {
                             "kind": "github",
                             "owner": "ogulcancelik",
-                            "repo": "herdr-plugin-examples",
+                            "repo": "mercury-plugin-examples",
                             "subdir": "worktree-bootstrap",
                             "resolved_commit": "old",
                             "managed_path": managed_checkout_for_server.display().to_string(),
@@ -947,7 +947,7 @@ command = ["sh", "-c", "echo new"]
         &[
             "plugin",
             "install",
-            "ogulcancelik/herdr-plugin-examples/worktree-bootstrap",
+            "ogulcancelik/mercury-plugin-examples/worktree-bootstrap",
             "--yes",
         ],
         &[("GIT_CONFIG_GLOBAL", &git_config)],
@@ -971,18 +971,18 @@ fn plugin_install_rejects_server_that_drops_source_metadata() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("fake-herdr.sock");
+    let socket_path = runtime_dir.join("fake-mercury.sock");
     let source_repo = base.join("source-repo");
     let plugin_dir = source_repo.join("worktree-bootstrap");
     fs::create_dir_all(&plugin_dir).unwrap();
     create_committed_repo(&source_repo);
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
+        plugin_dir.join("mercury-plugin.toml"),
         r#"
 id = "example.worktree-bootstrap"
 name = "Worktree Bootstrap"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_mercury_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
@@ -994,14 +994,14 @@ command = ["sh", "-c", "echo install"]
     .unwrap();
     run_git(
         &source_repo,
-        &["add", "worktree-bootstrap/herdr-plugin.toml"],
+        &["add", "worktree-bootstrap/mercury-plugin.toml"],
     );
     run_git(&source_repo, &["commit", "--quiet", "-m", "add plugin"]);
 
     fs::create_dir_all(&config_home).unwrap();
     fs::create_dir_all(&runtime_dir).unwrap();
     let managed_checkout = config_home
-        .join("herdr-dev")
+        .join("mercury-dev")
         .join("plugins")
         .join("github")
         .join(WORKTREE_BOOTSTRAP_MANAGED_COMPONENT);
@@ -1009,7 +1009,7 @@ command = ["sh", "-c", "echo install"]
     fs::write(
         &git_config,
         format!(
-            "[url \"file://{}\"]\n    insteadOf = https://github.com/ogulcancelik/herdr-plugin-examples.git\n",
+            "[url \"file://{}\"]\n    insteadOf = https://github.com/ogulcancelik/mercury-plugin-examples.git\n",
             source_repo.display()
         ),
     )
@@ -1041,8 +1041,8 @@ command = ["sh", "-c", "echo install"]
                         "plugin_id": "example.worktree-bootstrap",
                         "name": "Worktree Bootstrap",
                         "version": "0.1.0",
-                        "min_herdr_version": "0.6.10",
-                        "manifest_path": managed_checkout_for_server.join("herdr-plugin.toml").display().to_string(),
+                        "min_mercury_version": "0.6.10",
+                        "manifest_path": managed_checkout_for_server.join("mercury-plugin.toml").display().to_string(),
                         "plugin_root": managed_checkout_for_server.display().to_string(),
                         "enabled": true,
                         "source": {"kind": "local"}
@@ -1075,7 +1075,7 @@ command = ["sh", "-c", "echo install"]
         &[
             "plugin",
             "install",
-            "ogulcancelik/herdr-plugin-examples/worktree-bootstrap",
+            "ogulcancelik/mercury-plugin-examples/worktree-bootstrap",
             "--yes",
         ],
         &[("GIT_CONFIG_GLOBAL", &git_config)],
@@ -1099,18 +1099,18 @@ fn plugin_install_keeps_checkout_when_incompatible_server_cleanup_fails() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("fake-herdr.sock");
+    let socket_path = runtime_dir.join("fake-mercury.sock");
     let source_repo = base.join("source-repo");
     let plugin_dir = source_repo.join("worktree-bootstrap");
     fs::create_dir_all(&plugin_dir).unwrap();
     create_committed_repo(&source_repo);
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
+        plugin_dir.join("mercury-plugin.toml"),
         r#"
 id = "example.worktree-bootstrap"
 name = "Worktree Bootstrap"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_mercury_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
@@ -1122,14 +1122,14 @@ command = ["sh", "-c", "echo install"]
     .unwrap();
     run_git(
         &source_repo,
-        &["add", "worktree-bootstrap/herdr-plugin.toml"],
+        &["add", "worktree-bootstrap/mercury-plugin.toml"],
     );
     run_git(&source_repo, &["commit", "--quiet", "-m", "add plugin"]);
 
     fs::create_dir_all(&config_home).unwrap();
     fs::create_dir_all(&runtime_dir).unwrap();
     let managed_checkout = config_home
-        .join("herdr-dev")
+        .join("mercury-dev")
         .join("plugins")
         .join("github")
         .join(WORKTREE_BOOTSTRAP_MANAGED_COMPONENT);
@@ -1137,7 +1137,7 @@ command = ["sh", "-c", "echo install"]
     fs::write(
         &git_config,
         format!(
-            "[url \"file://{}\"]\n    insteadOf = https://github.com/ogulcancelik/herdr-plugin-examples.git\n",
+            "[url \"file://{}\"]\n    insteadOf = https://github.com/ogulcancelik/mercury-plugin-examples.git\n",
             source_repo.display()
         ),
     )
@@ -1165,8 +1165,8 @@ command = ["sh", "-c", "echo install"]
                         "plugin_id": "example.worktree-bootstrap",
                         "name": "Worktree Bootstrap",
                         "version": "0.1.0",
-                        "min_herdr_version": "0.6.10",
-                        "manifest_path": managed_checkout_for_server.join("herdr-plugin.toml").display().to_string(),
+                        "min_mercury_version": "0.6.10",
+                        "manifest_path": managed_checkout_for_server.join("mercury-plugin.toml").display().to_string(),
                         "plugin_root": managed_checkout_for_server.display().to_string(),
                         "enabled": true,
                         "source": {"kind": "local"}
@@ -1195,7 +1195,7 @@ command = ["sh", "-c", "echo install"]
         &[
             "plugin",
             "install",
-            "ogulcancelik/herdr-plugin-examples/worktree-bootstrap",
+            "ogulcancelik/mercury-plugin-examples/worktree-bootstrap",
             "--yes",
         ],
         &[("GIT_CONFIG_GLOBAL", &git_config)],

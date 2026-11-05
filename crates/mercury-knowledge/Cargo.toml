@@ -1,0 +1,15 @@
+[package]
+name = "mercury-knowledge"
+version = "0.0.0"
+edition = "2021"
+description = "Local, source-grounded Markdown knowledge and GraphRAG"
+
+[dependencies]
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+libc = "0.2"
+mercury-router = { path = "../mercury-router" }
+mercury-usage = { path = "../mercury-usage" }
+time = { version = "0.3.47", features = ["formatting"] }

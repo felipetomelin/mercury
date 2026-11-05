@@ -2,11 +2,14 @@ use crossterm::event::{KeyCode, KeyModifiers};
 
 mod io;
 mod keybinds;
+mod learn;
 mod model;
 mod sidebar;
 mod sound;
 mod tab_bar;
 mod theme;
+mod theme_import;
+mod usage;
 mod window_title;
 mod write;
 
@@ -21,11 +24,12 @@ pub use self::{
         BindingConfig, CommandKeybindConfig, CustomCommandAction, CustomCommandKeybind,
         IndexedKeybind, KeyCombo, Keybinds, LiveKeybindConfig,
     },
+    learn::LearnConfig,
     model::{
         validated_sidebar_bounds, AgentPanelSortConfig, Config, ConfigReloadReport,
         ConfigReloadStatus, HostCursorModeConfig, NewTerminalCwdConfig, PaneBordersConfig,
         ShellModeConfig, SidebarCollapsedModeConfig, StatusIndicatorStyle, TabBarPositionConfig,
-        ToastClipboardPosition, ToastConfig, ToastDelivery, ToastHerdrPosition,
+        ToastClipboardPosition, ToastConfig, ToastDelivery, ToastMercuryPosition,
         UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
     },
     sidebar::{
@@ -35,6 +39,7 @@ pub use self::{
     sound::SoundConfig,
     tab_bar::TabBarRightEntryConfig,
     theme::{parse_color, CustomThemeColors, ModeThemeColors, ThemeConfig, THEME_NAMES},
+    usage::UsageConfig,
     window_title::{WindowTitlePart, WindowTitleTemplate, WindowTitleToken},
 };
 
@@ -53,7 +58,7 @@ pub(crate) use self::{
 
 pub(crate) use self::{keybinds::CommandKeybindType, model::KeysConfig};
 
-pub const CONFIG_PATH_ENV_VAR: &str = "HERDR_CONFIG_PATH";
+pub const CONFIG_PATH_ENV_VAR: &str = "MERCURY_CONFIG_PATH";
 
 pub(crate) fn is_keybinding_config_diagnostic(diagnostic: &str) -> bool {
     if diagnostic.starts_with("config parse error:") || diagnostic.starts_with("config read error:")
@@ -106,7 +111,7 @@ impl Config {
         self.validated_keybinds().1
     }
 
-    /// Parsed keybinds for Herdr actions.
+    /// Parsed keybinds for Mercury actions.
     pub fn keybinds(&self) -> Keybinds {
         self.validated_keybinds().3
     }
@@ -123,6 +128,7 @@ impl Config {
             .chain(window_title_diagnostics(&self.ui.window_title))
             .chain(self.invalid_sidebar_bounds_diagnostic())
             .chain(self.invalid_headless_size_diagnostic())
+            .chain(self.usage.resolved_budgets().1)
             .collect()
     }
 

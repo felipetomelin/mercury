@@ -32,7 +32,7 @@ fn rewrite_schema_refs(value: &mut serde_json::Value, schema_name: &str) {
 fn protocol_schema_document() -> serde_json::Value {
     serde_json::json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "Herdr API",
+        "title": "Mercury API",
         "schema_version": 1,
         "protocol": crate::protocol::PROTOCOL_VERSION,
         "schemas": {
@@ -60,6 +60,80 @@ fn request_uses_dot_method_names() {
 
     let json = serde_json::to_value(&request).unwrap();
     assert_eq!(json["method"], "workspace.create");
+}
+
+#[test]
+fn route_preview_contract_round_trips_without_prompt_in_response() {
+    let request = Request {
+        id: "route-preview".into(),
+        method: Method::RoutePreview(RoutePreviewParams {
+            prompt: "sensitive task".into(),
+            tags: vec!["review".into()],
+            project: Some("checkout".into()),
+            workspace_id: None,
+            exclude: Vec::new(),
+        }),
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["method"], "route.preview");
+    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    let response = SuccessResponse {
+        id: "route-preview".into(),
+        result: ResponseResult::RoutePreview {
+            route: RoutePreviewInfo {
+                provider: "codex".into(),
+                headroom: "unknown".into(),
+                model: None,
+                effort: None,
+                matched_rule: Some(0),
+                fallback_from: None,
+                limits_observed_at_unix_ms: None,
+                budget_excluded_providers: Vec::new(),
+                codex_limit_refresh: None,
+            },
+        },
+    };
+    let json = serde_json::to_string(&response).unwrap();
+    assert!(!json.contains("sensitive task"));
+    assert_eq!(
+        serde_json::from_str::<SuccessResponse>(&json).unwrap(),
+        response
+    );
+}
+
+#[test]
+fn history_contract_round_trips_with_bounded_result_shape() {
+    let request = Request {
+        id: "history-1".into(),
+        method: Method::HistorySearch(HistorySearchParams {
+            query: "old task".into(),
+            provider: Some("codex".into()),
+            cwd: None,
+            from: Some("2020-01-01".into()),
+            until: None,
+            limit: 30,
+        }),
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["method"], "history.search");
+    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    let response = SuccessResponse {
+        id: "history-1".into(),
+        result: ResponseResult::HistorySearch {
+            hits: vec![HistoryHitInfo {
+                provider: "codex".into(),
+                session_id: "session-1".into(),
+                cwd: Some("/project".into()),
+                timestamp: "2020-01-01".into(),
+                snippet: "old task".into(),
+            }],
+        },
+    };
+    assert_eq!(
+        serde_json::from_str::<SuccessResponse>(&serde_json::to_string(&response).unwrap())
+            .unwrap(),
+        response
+    );
 }
 
 #[test]
@@ -186,9 +260,9 @@ fn generated_protocol_schema_artifact_is_current() {
         serde_json::to_string_pretty(&protocol_schema_document()).unwrap()
     );
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("docs/next/api/herdr-api.schema.json");
+        .join("docs/next/api/mercury-api.schema.json");
 
-    if std::env::var_os("HERDR_UPDATE_API_SCHEMA").is_some() {
+    if std::env::var_os("MERCURY_UPDATE_API_SCHEMA").is_some() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, &actual).unwrap();
         return;
@@ -196,13 +270,264 @@ fn generated_protocol_schema_artifact_is_current() {
 
     let expected = std::fs::read_to_string(&path).unwrap_or_else(|err| {
         panic!(
-            "failed to read {}; run `HERDR_UPDATE_API_SCHEMA=1 just test-one generated_protocol_schema_artifact_is_current`: {err}",
+            "failed to read {}; run `MERCURY_UPDATE_API_SCHEMA=1 just test-one generated_protocol_schema_artifact_is_current`: {err}",
             path.display()
         )
     });
     assert_eq!(
         expected, actual,
-        "generated API schema artifact is stale; run `HERDR_UPDATE_API_SCHEMA=1 just test-one generated_protocol_schema_artifact_is_current`"
+        "generated API schema artifact is stale; run `MERCURY_UPDATE_API_SCHEMA=1 just test-one generated_protocol_schema_artifact_is_current`"
+    );
+}
+
+#[test]
+fn claude_session_end_request_round_trips_with_exact_fields() {
+    let request = Request {
+        id: "learn-end".into(),
+        method: Method::LearnClaudeSessionEnd(LearnClaudeSessionEndParams {
+            pane_id: "pane-1".into(),
+            session_id: "session-1".into(),
+            transcript_path: "/tmp/session-1.jsonl".into(),
+        }),
+    };
+    let json = serde_json::to_string(&request).unwrap();
+    assert!(json.contains("\"method\":\"learn.claude_session_end\""));
+    assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), request);
+    assert!(serde_json::from_str::<Request>(
+        r#"{"id":"bad","method":"learn.claude_session_end","params":{"pane_id":"pane-1","session_id":"session-1","transcript_path":"/tmp/session-1.jsonl","extra":true}}"#
+    )
+    .is_err());
+}
+
+#[test]
+fn claude_turn_end_request_round_trips_without_session_end_aliasing() {
+    let request = Request {
+        id: "learn-turn".into(),
+        method: Method::LearnClaudeTurnEnd(LearnClaudeSessionEndParams {
+            pane_id: "pane-1".into(),
+            session_id: "session-1".into(),
+            transcript_path: "/tmp/session-1.jsonl".into(),
+        }),
+    };
+    let json = serde_json::to_string(&request).unwrap();
+    assert!(json.contains("\"method\":\"learn.claude_turn_end\""));
+    assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), request);
+}
+
+#[test]
+fn learn_list_request_and_metadata_response_round_trip() {
+    let request = Request {
+        id: "learn-list".into(),
+        method: Method::LearnList(LearnListParams { limit: Some(10) }),
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["method"], "learn.list");
+    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    assert!(serde_json::from_str::<Request>(
+        r#"{"id":"bad","method":"learn.list","params":{"limit":10,"extra":true}}"#
+    )
+    .is_err());
+
+    let response = SuccessResponse {
+        id: "learn-list".into(),
+        result: ResponseResult::LearnList {
+            changes: vec![LearnChangeInfo {
+                id: "change-1".into(),
+                target_id: "instructions".into(),
+                status: "applied".into(),
+                created_at_ms: 1,
+            }],
+        },
+    };
+    assert_eq!(
+        serde_json::from_str::<SuccessResponse>(&serde_json::to_string(&response).unwrap())
+            .unwrap(),
+        response
+    );
+}
+
+#[test]
+fn learn_show_and_undo_contracts_round_trip() {
+    let target = LearnChangeTarget {
+        change_id: "change-1".into(),
+    };
+    for method in [Method::LearnShow(target.clone()), Method::LearnUndo(target)] {
+        let request = Request {
+            id: "learn-target".into(),
+            method,
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(matches!(
+            json["method"].as_str(),
+            Some("learn.show" | "learn.undo")
+        ));
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    }
+    let info = LearnChangeInfo {
+        id: "change-1".into(),
+        target_id: "instructions".into(),
+        status: "applied".into(),
+        created_at_ms: 1,
+    };
+    let response = SuccessResponse {
+        id: "learn-target".into(),
+        result: ResponseResult::LearnShow {
+            detail: LearnChangeDetail {
+                change: info,
+                before_hash: "before".into(),
+                after_hash: "after".into(),
+                reason_redacted: true,
+                backup_available: Some(true),
+            },
+        },
+    };
+    assert_eq!(
+        serde_json::from_str::<SuccessResponse>(&serde_json::to_string(&response).unwrap())
+            .unwrap(),
+        response
+    );
+    let mut older = serde_json::to_value(&response).unwrap();
+    older["result"]["detail"]
+        .as_object_mut()
+        .unwrap()
+        .remove("backup_available");
+    let parsed: SuccessResponse = serde_json::from_value(older).unwrap();
+    let ResponseResult::LearnShow { detail } = parsed.result else {
+        panic!("expected Learn detail");
+    };
+    assert_eq!(detail.backup_available, None);
+}
+
+#[test]
+fn learn_undo_date_contract_reports_partial_outcomes_explicitly() {
+    let request = Request {
+        id: "learn-date".into(),
+        method: Method::LearnUndoDate(LearnUndoDateParams {
+            date: "2026-10-06".into(),
+        }),
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["method"], "learn.undo_date");
+    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    let response = SuccessResponse {
+        id: "learn-date".into(),
+        result: ResponseResult::LearnUndoDate {
+            date: "2026-10-06".into(),
+            outcomes: vec![LearnUndoOutcome {
+                change_id: "change-1".into(),
+                outcome: LearnUndoOutcomeKind::Conflict,
+            }],
+            interrupted: false,
+            remaining_count: 0,
+        },
+    };
+    assert_eq!(
+        serde_json::from_str::<SuccessResponse>(&serde_json::to_string(&response).unwrap())
+            .unwrap(),
+        response
+    );
+}
+
+#[test]
+fn learn_status_contract_reports_ledger_wide_counts() {
+    let request = Request {
+        id: "learn-status".into(),
+        method: Method::LearnStatus(EmptyParams::default()),
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["method"], "learn.status");
+    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    let response = SuccessResponse {
+        id: "learn-status".into(),
+        result: ResponseResult::LearnStatus {
+            status: LearnStatusInfo {
+                ledger_present: true,
+                changes: LearnChangeCounts {
+                    prepared: 0,
+                    applied: 1,
+                    undo_prepared: 0,
+                    conflict: 0,
+                    failed: 0,
+                    undone: 0,
+                },
+                triggers: LearnTriggerCounts {
+                    claimed: 1,
+                    succeeded: 0,
+                    failed: 0,
+                },
+                recent_triggers: Vec::new(),
+                recent_metrics: vec![LearnObservedMetricInfo {
+                    task_key: "cron:job-1".into(),
+                    provider: "claude".into(),
+                    input_tokens: 120,
+                    output_tokens: 30,
+                    cost_microusd: Some(125),
+                    outcome: Some("succeeded".into()),
+                    observed_at_ms: 1234,
+                    comparison: None,
+                }],
+            },
+        },
+    };
+    assert_eq!(
+        serde_json::from_str::<SuccessResponse>(&serde_json::to_string(&response).unwrap())
+            .unwrap(),
+        response
+    );
+    let mut older = serde_json::to_value(&response).unwrap();
+    older["result"]["status"]
+        .as_object_mut()
+        .unwrap()
+        .remove("recent_triggers");
+    older["result"]["status"]
+        .as_object_mut()
+        .unwrap()
+        .remove("recent_metrics");
+    let parsed: SuccessResponse = serde_json::from_value(older).unwrap();
+    let ResponseResult::LearnStatus { status } = parsed.result else {
+        panic!("expected Learn status");
+    };
+    assert!(status.recent_triggers.is_empty());
+    assert!(status.recent_metrics.is_empty());
+}
+
+#[test]
+fn learn_diff_contract_redacts_content_and_round_trips() {
+    let request = Request {
+        id: "learn-diff".into(),
+        method: Method::LearnDiff(LearnChangeTarget {
+            change_id: "change-1".into(),
+        }),
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["method"], "learn.diff");
+    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    let response = SuccessResponse {
+        id: "learn-diff".into(),
+        result: ResponseResult::LearnDiff {
+            diff: LearnDiffInfo {
+                change: LearnChangeInfo {
+                    id: "change-1".into(),
+                    target_id: "instructions".into(),
+                    status: "undone".into(),
+                    created_at_ms: 1,
+                },
+                summary: Some(LearnDiffSummary {
+                    before_lines: 2,
+                    after_lines: 3,
+                    unchanged_prefix_lines: 1,
+                    unchanged_suffix_lines: 0,
+                    removed_lines: 1,
+                    added_lines: 2,
+                }),
+                content_redacted: true,
+            },
+        },
+    };
+    assert_eq!(
+        serde_json::from_str::<SuccessResponse>(&serde_json::to_string(&response).unwrap())
+            .unwrap(),
+        response
     );
 }
 
@@ -217,6 +542,63 @@ fn request_round_trips_for_server_stop() {
     assert_eq!(json["method"], "server.stop");
     let restored: Request = serde_json::from_value(json).unwrap();
     assert_eq!(restored, request);
+}
+
+#[test]
+fn cron_add_request_round_trips_without_client_owned_schedule_state() {
+    let request = Request {
+        id: "cron-1".into(),
+        method: Method::CronAdd(CronAddParams {
+            definition: CronJobDefinition {
+                name: "check".into(),
+                schedule: "every 2h".into(),
+                utc_offset: Some("+00:00".into()),
+                target: mercury_cron::JobTarget::Script {
+                    program: "/bin/echo".into(),
+                    args: Vec::new(),
+                },
+                workdir: None,
+                timeout_seconds: None,
+                enabled: None,
+                catch_up: mercury_cron::CatchUp::Skip,
+                repeat_times: None,
+                deliver: Vec::new(),
+            },
+        }),
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["method"], "cron.add");
+    assert!(json["params"]["definition"].get("id").is_none());
+    assert!(json["params"]["definition"].get("next_run_at").is_none());
+    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+}
+
+#[test]
+fn cron_log_contract_round_trips_without_exposing_a_path() {
+    let request = Request {
+        id: "cron-log".into(),
+        method: Method::CronLog(CronLogParams {
+            run_id: "run-1".into(),
+        }),
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["method"], "cron.log");
+    assert_eq!(json["params"]["run_id"], "run-1");
+    assert!(json["params"].get("path").is_none());
+    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+}
+
+#[test]
+fn cron_get_definition_contract_round_trips() {
+    let request = Request {
+        id: "cron-get".into(),
+        method: Method::CronGet(CronJobTarget {
+            job_id: "job-1".into(),
+        }),
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["method"], "cron.get");
+    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
 }
 
 #[test]
@@ -332,7 +714,7 @@ fn notification_show_request_parses() {
     assert_eq!(params.body.as_deref(), Some("api workspace"));
     assert_eq!(
         params.position,
-        Some(crate::config::ToastHerdrPosition::TopLeft)
+        Some(crate::config::ToastMercuryPosition::TopLeft)
     );
     assert_eq!(params.sound, NotificationShowSound::Request);
 }
@@ -353,12 +735,12 @@ fn client_window_title_requests_round_trip() {
     let set = Request {
         id: "req_title_set".into(),
         method: Method::ClientWindowTitleSet(ClientWindowTitleSetParams {
-            title: "herdr api".into(),
+            title: "mercury api".into(),
         }),
     };
     let json = serde_json::to_value(&set).unwrap();
     assert_eq!(json["method"], "client.window_title.set");
-    assert_eq!(json["params"]["title"], "herdr api");
+    assert_eq!(json["params"]["title"], "mercury api");
     let restored: Request = serde_json::from_value(json).unwrap();
     assert_eq!(restored, set);
 
@@ -724,6 +1106,7 @@ fn success_response_round_trips() {
                 live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(1),
+                mercury_feature_generation: Some(1),
                 surface_interest: true,
                 health_check: true,
                 ssh_agent_registration: false,
@@ -794,7 +1177,7 @@ fn worktree_request_and_response_round_trip() {
             workspace: WorkspaceInfo {
                 workspace_id: "w_1".into(),
                 number: 2,
-                label: "herdr".into(),
+                label: "mercury".into(),
                 focused: true,
                 pane_count: 1,
                 tab_count: 1,
@@ -802,10 +1185,10 @@ fn worktree_request_and_response_round_trip() {
                 agent_status: AgentStatus::Unknown,
                 tokens: HashMap::new(),
                 worktree: Some(WorkspaceWorktreeInfo {
-                    repo_key: "/repo/herdr/.git".into(),
-                    repo_name: "herdr".into(),
-                    repo_root: "/repo/herdr".into(),
-                    checkout_path: "/worktrees/herdr/worktree-api".into(),
+                    repo_key: "/repo/mercury/.git".into(),
+                    repo_name: "mercury".into(),
+                    repo_root: "/repo/mercury".into(),
+                    checkout_path: "/worktrees/mercury/worktree-api".into(),
                     is_linked_worktree: true,
                 }),
             },
@@ -813,7 +1196,7 @@ fn worktree_request_and_response_round_trip() {
                 tab_id: "w_1:1".into(),
                 workspace_id: "w_1".into(),
                 number: 1,
-                label: "herdr".into(),
+                label: "mercury".into(),
                 focused: true,
                 pane_count: 1,
                 agent_status: AgentStatus::Unknown,
@@ -824,7 +1207,7 @@ fn worktree_request_and_response_round_trip() {
                 workspace_id: "w_1".into(),
                 tab_id: "w_1:1".into(),
                 focused: true,
-                cwd: Some("/worktrees/herdr/worktree-api".into()),
+                cwd: Some("/worktrees/mercury/worktree-api".into()),
                 foreground_cwd: None,
                 restore_error: None,
                 label: None,
@@ -841,14 +1224,14 @@ fn worktree_request_and_response_round_trip() {
                 revision: 0,
             },
             worktree: WorktreeInfo {
-                path: "/worktrees/herdr/worktree-api".into(),
+                path: "/worktrees/mercury/worktree-api".into(),
                 branch: Some("worktree/api".into()),
                 is_bare: false,
                 is_detached: false,
                 is_prunable: false,
                 is_linked_worktree: true,
                 open_workspace_id: Some("w_1".into()),
-                label: "herdr".into(),
+                label: "mercury".into(),
             },
         },
     };
@@ -881,7 +1264,7 @@ fn worktree_lifecycle_events_round_trip() {
     let workspace = WorkspaceInfo {
         workspace_id: "w_2".into(),
         number: 2,
-        label: "herdr".into(),
+        label: "mercury".into(),
         focused: true,
         pane_count: 1,
         tab_count: 1,
@@ -889,22 +1272,22 @@ fn worktree_lifecycle_events_round_trip() {
         agent_status: AgentStatus::Unknown,
         tokens: HashMap::new(),
         worktree: Some(WorkspaceWorktreeInfo {
-            repo_key: "/repo/herdr/.git".into(),
-            repo_name: "herdr".into(),
-            repo_root: "/repo/herdr".into(),
-            checkout_path: "/worktrees/herdr/worktree-api".into(),
+            repo_key: "/repo/mercury/.git".into(),
+            repo_name: "mercury".into(),
+            repo_root: "/repo/mercury".into(),
+            checkout_path: "/worktrees/mercury/worktree-api".into(),
             is_linked_worktree: true,
         }),
     };
     let worktree = WorktreeInfo {
-        path: "/worktrees/herdr/worktree-api".into(),
+        path: "/worktrees/mercury/worktree-api".into(),
         branch: Some("worktree/api".into()),
         is_bare: false,
         is_detached: false,
         is_prunable: false,
         is_linked_worktree: true,
         open_workspace_id: Some("w_2".into()),
-        label: "herdr".into(),
+        label: "mercury".into(),
     };
 
     for event in [
@@ -990,9 +1373,9 @@ fn plugin_link_list_unlink_round_trip() {
         plugin_id: "example.worktree-bootstrap".into(),
         name: "Worktree Bootstrap".into(),
         version: "0.1.0".into(),
-        min_herdr_version: crate::build_info::BASE_VERSION.into(),
+        min_mercury_version: crate::build_info::BASE_VERSION.into(),
         description: Some("Prepare new worktrees".into()),
-        manifest_path: "/plugins/worktree-bootstrap/herdr-plugin.toml".into(),
+        manifest_path: "/plugins/worktree-bootstrap/mercury-plugin.toml".into(),
         plugin_root: "/plugins/worktree-bootstrap".into(),
         enabled: true,
         platforms: None,
@@ -1078,7 +1461,7 @@ fn layout_export_apply_round_trip() {
             pane: LayoutPane {
                 label: Some("tests".into()),
                 command: Some(vec!["sh".into(), "-c".into(), "just test".into()]),
-                env: HashMap::from([("HERDR_ROLE".into(), "tests".into())]),
+                env: HashMap::from([("MERCURY_ROLE".into(), "tests".into())]),
                 ..Default::default()
             },
         }),
@@ -1409,7 +1792,7 @@ fn plugin_pane_open_request_round_trips() {
             direction: None,
             cwd: Some("/tmp".into()),
             focus: true,
-            env: [("HERDR_ROLE".to_string(), "board".to_string())].into(),
+            env: [("MERCURY_ROLE".to_string(), "board".to_string())].into(),
         }),
     };
 
@@ -1418,7 +1801,7 @@ fn plugin_pane_open_request_round_trips() {
     assert_eq!(json["params"]["placement"], "popup");
     assert_eq!(json["params"]["width"], 90);
     assert_eq!(json["params"]["height"], "80%");
-    assert_eq!(json["params"]["env"]["HERDR_ROLE"], "board");
+    assert_eq!(json["params"]["env"]["MERCURY_ROLE"], "board");
     let restored: Request = serde_json::from_value(json).unwrap();
     assert_eq!(restored, request);
 }

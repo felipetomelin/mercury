@@ -25,11 +25,11 @@ pub(super) fn mismatch_response(
 
     let message = if client_protocol > server_protocol {
         format!(
-            "client protocol {client_protocol} is newer than server protocol {server_protocol}; restart the Herdr server before using this command. {restart_guidance}"
+            "client protocol {client_protocol} is newer than server protocol {server_protocol}; restart the Mercury server before using this command. {restart_guidance}"
         )
     } else {
         format!(
-            "client protocol {client_protocol} is older than server protocol {server_protocol}; upgrade the Herdr client before using this command"
+            "client protocol {client_protocol} is older than server protocol {server_protocol}; upgrade the Mercury client before using this command"
         )
     };
 
@@ -38,6 +38,31 @@ pub(super) fn mismatch_response(
         error: ErrorBody {
             code: "protocol_mismatch".into(),
             message,
+        },
+    })
+}
+
+pub(super) fn missing_mercury_features_response(
+    request_id: &str,
+    method_name: &str,
+    feature_generation: Option<u32>,
+    restart_guidance: &str,
+) -> Option<ErrorResponse> {
+    let requires_mercury_features = ["cron.", "route.", "learn.", "history.", "usage."]
+        .iter()
+        .any(|prefix| method_name.starts_with(prefix));
+    if !requires_mercury_features
+        || feature_generation == Some(crate::api::schema::MERCURY_FEATURE_GENERATION)
+    {
+        return None;
+    }
+    Some(ErrorResponse {
+        id: request_id.to_owned(),
+        error: ErrorBody {
+            code: "server_restart_required".into(),
+            message: format!(
+                "the running Mercury server predates {method_name}; restart or live-handoff the server before using this command. {restart_guidance}"
+            ),
         },
     })
 }
@@ -96,7 +121,10 @@ mod tests {
             .error
             .message
             .contains("older than server protocol"));
-        assert!(response.error.message.contains("upgrade the Herdr client"));
+        assert!(response
+            .error
+            .message
+            .contains("upgrade the Mercury client"));
         assert!(!response.error.message.contains("unused restart guidance"));
     }
 
@@ -106,5 +134,22 @@ mod tests {
         assert!(!was_reported(&std::io::Error::other(
             "protocol mismatch was already reported"
         )));
+    }
+
+    #[test]
+    fn old_server_receives_restart_guidance_for_new_local_methods_only() {
+        let response = missing_mercury_features_response(
+            "cli:cron:doctor",
+            "cron.doctor",
+            None,
+            "preserve panes with live handoff",
+        )
+        .unwrap();
+        assert_eq!(response.error.code, "server_restart_required");
+        assert!(response.error.message.contains("live handoff"));
+        assert!(missing_mercury_features_response("id", "pane.list", None, "restart").is_none());
+        assert!(
+            missing_mercury_features_response("id", "cron.doctor", Some(1), "restart").is_none()
+        );
     }
 }

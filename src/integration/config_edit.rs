@@ -133,7 +133,7 @@ pub(crate) fn ensure_flat_command_hook(
         "type": "command",
         "command": command,
         "timeout": timeout_ms,
-        "description": "Report MastraCode agent state to Herdr",
+        "description": "Report MastraCode agent state to Mercury",
     }));
     Ok(())
 }
@@ -410,7 +410,7 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
         if !result.is_empty() {
             result.push('\n');
         }
-        result.push_str("plugins:\n  enabled:\n    - herdr-agent-state\n");
+        result.push_str("plugins:\n  enabled:\n    - mercury-agent-state\n");
         return result;
     };
 
@@ -464,7 +464,7 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
 
         match (enabled, existing_item_index) {
             (true, Some(_)) | (false, None) => return content.to_string(),
-            (true, None) => lines.insert(list_start, "    - herdr-agent-state".to_string()),
+            (true, None) => lines.insert(list_start, "    - mercury-agent-state".to_string()),
             (false, Some(index)) => {
                 lines.remove(index);
             }
@@ -499,7 +499,7 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
 
         match (enabled, existing_item_index) {
             (true, Some(_)) | (false, None) => return content.to_string(),
-            (true, None) => lines.insert(flat_list_start, "  - herdr-agent-state".to_string()),
+            (true, None) => lines.insert(flat_list_start, "  - mercury-agent-state".to_string()),
             (false, Some(index)) => {
                 lines.remove(index);
             }
@@ -509,7 +509,7 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
 
     if enabled {
         lines.insert(plugins_index + 1, "  enabled:".to_string());
-        lines.insert(plugins_index + 2, "    - herdr-agent-state".to_string());
+        lines.insert(plugins_index + 2, "    - mercury-agent-state".to_string());
         return join_yaml_lines(lines, trailing_newline);
     }
 

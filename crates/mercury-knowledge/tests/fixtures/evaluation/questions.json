@@ -1,0 +1,301 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "text-1",
+      "group": "text",
+      "question": "What kind of component is Beta?",
+      "sources": [
+        "Queue.md"
+      ],
+      "terms": [
+        "queue"
+      ],
+      "mode": "local"
+    },
+    {
+      "id": "text-2",
+      "group": "text",
+      "question": "Why did ADR-17 choose Beta?",
+      "sources": [
+        "Queue.md"
+      ],
+      "terms": [
+        "replay"
+      ],
+      "mode": "local"
+    },
+    {
+      "id": "text-3",
+      "group": "text",
+      "question": "What deploy tools does M1 use?",
+      "sources": [
+        "Migration.md"
+      ],
+      "terms": [
+        "gitlab",
+        "helm"
+      ],
+      "mode": "local"
+    },
+    {
+      "id": "text-4",
+      "group": "text",
+      "question": "What does M1 use for rollback?",
+      "sources": [
+        "Migration.md"
+      ],
+      "terms": [
+        "digest"
+      ],
+      "mode": "local"
+    },
+    {
+      "id": "text-5",
+      "group": "text",
+      "question": "Which APM platform does Alpha use?",
+      "sources": [
+        "Observability.md"
+      ],
+      "terms": [
+        "datadog"
+      ],
+      "mode": "local"
+    },
+    {
+      "id": "text-6",
+      "group": "text",
+      "question": "What value fixed DD_SERVICE in INC-9?",
+      "sources": [
+        "Observability.md"
+      ],
+      "terms": [
+        "alpha-api"
+      ],
+      "mode": "local"
+    },
+    {
+      "id": "text-7",
+      "group": "text",
+      "question": "How does Gateway validate tokens?",
+      "sources": [
+        "Authentication.md"
+      ],
+      "terms": [
+        "introspection"
+      ],
+      "mode": "local"
+    },
+    {
+      "id": "text-8",
+      "group": "text",
+      "question": "Why did ADR-21 choose introspection?",
+      "sources": [
+        "Authentication.md"
+      ],
+      "terms": [
+        "revocation"
+      ],
+      "mode": "local"
+    },
+    {
+      "id": "relation-1",
+      "group": "relation",
+      "question": "What queue does Alpha depend on?",
+      "sources": [
+        "Queue.md"
+      ],
+      "terms": [
+        "beta"
+      ],
+      "mode": "local"
+    },
+    {
+      "id": "relation-2",
+      "group": "relation",
+      "question": "What service does Alpha depend on for authentication?",
+      "sources": [
+        "Authentication.md"
+      ],
+      "terms": [
+        "gateway"
+      ],
+      "mode": "local"
+    },
+    {
+      "id": "relation-3",
+      "group": "relation",
+      "question": "Which service does Migration M1 affect?",
+      "sources": [
+        "Migration.md"
+      ],
+      "terms": [
+        "alpha"
+      ],
+      "mode": "local"
+    },
+    {
+      "id": "relation-4",
+      "group": "relation",
+      "question": "What resolved incident INC-12?",
+      "sources": [
+        "Queue.md"
+      ],
+      "terms": [
+        "idempotent"
+      ],
+      "mode": "local"
+    },
+    {
+      "id": "relation-5",
+      "group": "relation",
+      "question": "What resolved missing traces in incident INC-9?",
+      "sources": [
+        "Observability.md"
+      ],
+      "terms": [
+        "dd_service",
+        "alpha-api"
+      ],
+      "mode": "local"
+    },
+    {
+      "id": "relation-6",
+      "group": "relation",
+      "question": "Which runbook documents Gateway checks?",
+      "sources": [
+        "Authentication.md"
+      ],
+      "terms": [
+        "rb-8"
+      ],
+      "mode": "local"
+    },
+    {
+      "id": "global-1",
+      "group": "global",
+      "question": "Explain how Alpha depends on both persistence and authentication.",
+      "sources": [
+        "Queue.md",
+        "Authentication.md"
+      ],
+      "terms": [
+        "beta",
+        "gateway"
+      ],
+      "mode": "global"
+    },
+    {
+      "id": "global-2",
+      "group": "global",
+      "question": "Which observability measures must M1 check before rollout?",
+      "sources": [
+        "Migration.md",
+        "Observability.md"
+      ],
+      "terms": [
+        "error",
+        "latency"
+      ],
+      "mode": "global"
+    },
+    {
+      "id": "global-3",
+      "group": "global",
+      "question": "How do the decisions about Beta and Gateway support reliability?",
+      "sources": [
+        "Queue.md",
+        "Authentication.md"
+      ],
+      "terms": [
+        "replay",
+        "revocation"
+      ],
+      "mode": "global"
+    },
+    {
+      "id": "global-4",
+      "group": "global",
+      "question": "Summarize INC-12 and INC-9 and how each was resolved.",
+      "sources": [
+        "Queue.md",
+        "Observability.md"
+      ],
+      "terms": [
+        "idempotent",
+        "alpha-api"
+      ],
+      "mode": "global"
+    },
+    {
+      "id": "global-5",
+      "group": "global",
+      "question": "What should be verified about Gateway and security before releasing M1?",
+      "sources": [
+        "Migration.md",
+        "Authentication.md"
+      ],
+      "terms": [
+        "gateway",
+        "vulnerabilities"
+      ],
+      "mode": "global"
+    },
+    {
+      "id": "global-6",
+      "group": "global",
+      "question": "Connect the Alpha rollout requirements with queue and authentication dependencies.",
+      "sources": [
+        "Migration.md",
+        "Queue.md",
+        "Authentication.md"
+      ],
+      "terms": [
+        "alpha",
+        "beta",
+        "gateway"
+      ],
+      "mode": "global"
+    },
+    {
+      "id": "unanswered-1",
+      "group": "unanswered",
+      "question": "What is the production AWS account ID?",
+      "sources": [],
+      "terms": [],
+      "mode": "local"
+    },
+    {
+      "id": "unanswered-2",
+      "group": "unanswered",
+      "question": "What secret token does Gateway use?",
+      "sources": [],
+      "terms": [],
+      "mode": "local"
+    },
+    {
+      "id": "unanswered-3",
+      "group": "unanswered",
+      "question": "Who personally approved ADR-17?",
+      "sources": [],
+      "terms": [],
+      "mode": "local"
+    },
+    {
+      "id": "unanswered-4",
+      "group": "unanswered",
+      "question": "What is the monthly production budget?",
+      "sources": [],
+      "terms": [],
+      "mode": "local"
+    },
+    {
+      "id": "unanswered-5",
+      "group": "unanswered",
+      "question": "What exact production outage date was INC-12?",
+      "sources": [],
+      "terms": [],
+      "mode": "local"
+    }
+  ]
+}

@@ -73,6 +73,16 @@ pub(crate) struct WorktreeReadData {
     pub entries: Vec<crate::worktree::ExistingWorktree>,
 }
 
+/// Result of a background usage refresh for one tracked terminal (`src/app/usage.rs`).
+/// `usage: None` means the session's file could not be resolved or read this
+/// round (e.g. hook not installed, or the file disappeared); the caller must
+/// treat that as "n/a", never fabricate a number.
+#[derive(Debug, Clone)]
+pub struct TerminalUsageUpdate {
+    pub terminal_id: crate::terminal::TerminalId,
+    pub usage: Option<mercury_usage::SessionUsage>,
+}
+
 /// An event from a background task to the main loop.
 #[derive(Debug)]
 pub enum AppEvent {
@@ -177,7 +187,7 @@ pub enum AppEvent {
     /// The host-facing process forwards them to its outer terminal.
     TerminalBell { pane_id: PaneId, count: u16 },
     /// A pane child emitted a valid OSC 52 clipboard write. The main loop
-    /// re-emits it through herdr's own clipboard writer.
+    /// re-emits it through mercury's own clipboard writer.
     ClipboardWrite { content: Vec<u8> },
     /// A pane child reported its shell current directory through terminal
     /// metadata such as OSC 7.
@@ -190,6 +200,47 @@ pub enum AppEvent {
         results: Vec<WorkspaceGitStatus>,
         cache_updates: Vec<(std::path::PathBuf, GitStatusCacheEntry)>,
     },
+    /// Background usage refresh completed for tracked Claude/Codex sessions
+    /// (`src/app/usage.rs`, `docs/dev/usage-ui-design.md` D1/D3).
+    UsageRefreshed {
+        sessions: Vec<TerminalUsageUpdate>,
+        limits: Vec<mercury_usage::ProviderLimits>,
+    },
+    /// The bounded startup scan of agent-owned JSONL completed.
+    UsageHistoryScanned {
+        sessions: Vec<mercury_usage::history_scan::HistoricalSession>,
+    },
+    /// Read-only Codex app-server usage poll completed in a background thread.
+    CodexUsageRefreshed {
+        identity: Option<String>,
+        limits: Option<mercury_usage::ProviderLimits>,
+        costs: Vec<(String, f64)>,
+        error: Option<String>,
+    },
+    ClaudeAccountUsageRefreshed {
+        limits: Option<mercury_usage::ProviderLimits>,
+        identity: Option<String>,
+        error: Option<String>,
+    },
+    /// An on-demand Codex account-limit read for queued route previews ended.
+    RouteLimitsRefreshed {
+        limits: Option<mercury_usage::ProviderLimits>,
+    },
+    /// The cost ledger thread (`src/app/usage_ledger.rs`, D9) replayed past
+    /// entries at startup or appended a new delta from a statusline report.
+    UsageCostRecorded {
+        entries: Vec<mercury_usage::CostLedgerEntry>,
+    },
+    /// A scheduled command finished off-thread; the app persists its bounded
+    /// output and final ledger status on the server-owner thread.
+    CronCompleted {
+        run: Box<mercury_cron::scheduler::ReservedRun>,
+        result: Result<mercury_cron::executor::CommandOutput, String>,
+    },
+    /// A reversible Learn edit changed the route table in config.toml.
+    LearnRouteChanged,
+    /// A reversible Learn edit or undo changed one allowlisted Cron job.
+    LearnCronChanged,
     /// A configured tab bar status command finished.
     TabBarCommandFinished {
         generation: u64,

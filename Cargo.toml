@@ -1,29 +1,32 @@
 [package]
-name = "herdr"
+name = "mercury"
 version = "0.9.3"
 edition = "2021"
 build = "build.rs"
-description = "terminal workspace manager for AI coding agents"
-repository = "https://github.com/herdrdev/herdr"
-homepage = "https://herdr.dev"
+description = "terminal controller for AI coding agents (Claude Code + Codex CLI)"
 keywords = ["terminal", "tui", "ai", "agents", "multiplexer"]
 categories = ["command-line-utilities"]
 include = [
     "src/**/*",
     "assets/sounds/*",
-    "docs/next/api/herdr-api.schema.json",
-    "skills/herdr/SKILL.md",
-    "distribution/install.ps1",
+    "docs/next/api/mercury-api.schema.json",
+    "skills/mercury/SKILL.md",
     "README.md",
     "Cargo.toml",
 ]
 
 [workspace]
-members = ["crates/ghostty-vt"]
-default-members = [".", "crates/ghostty-vt"]
+members = ["crates/ghostty-vt", "crates/mercury-usage", "crates/mercury-cron", "crates/mercury-router", "crates/mercury-history", "crates/mercury-learn", "crates/mercury-knowledge"]
+default-members = [".", "crates/ghostty-vt", "crates/mercury-usage", "crates/mercury-cron", "crates/mercury-router", "crates/mercury-history", "crates/mercury-learn", "crates/mercury-knowledge"]
 
 [dependencies]
+mercury-knowledge = { path = "crates/mercury-knowledge" }
+mercury-cron = { path = "crates/mercury-cron" }
+mercury-router = { path = "crates/mercury-router" }
+mercury-history = { path = "crates/mercury-history" }
+mercury-learn = { path = "crates/mercury-learn" }
 ghostty-vt = { path = "crates/ghostty-vt" }
+mercury-usage = { path = "crates/mercury-usage" }
 base64 = "0.22.1"
 bincode = { version = "2", features = ["serde"] }
 bytes = "1"
@@ -38,11 +41,12 @@ portable-pty = "=0.9.0"
 png = "0.17"
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_ignored = "0.1.14"
 serde_json = "1"
 sha2 = "0.10"
-time = { version = "0.3.47", features = ["formatting"] }
+time = { version = "0.3.47", features = ["formatting", "local-offset"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }
 toml = "0.8"
 tracing = "0.1.44"

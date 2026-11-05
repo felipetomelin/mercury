@@ -87,9 +87,10 @@ fn focused_last_overflow_tab_shows_its_full_label() {
         let frame = state
             .compose(133, 20)
             .expect("reporter's overflowing strip");
+        // Usage, Crons, History, Learn and Knowledge reserve 42 columns including the gap.
         assert_eq!(
             state.hits.new_tab.right() - state.hits.tab_scroll_left.x,
-            107
+            65
         );
         let rect = state
             .hits

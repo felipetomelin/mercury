@@ -75,9 +75,9 @@ mod tests {
 
     #[test]
     fn endpoint_paths_are_stable_and_distinct() {
-        let first = path_for_local_endpoint(Path::new("/run/herdr/one.sock"));
-        let again = path_for_local_endpoint(Path::new("/run/herdr/one.sock"));
-        let second = path_for_local_endpoint(Path::new("/run/herdr/two.sock"));
+        let first = path_for_local_endpoint(Path::new("/run/mercury/one.sock"));
+        let again = path_for_local_endpoint(Path::new("/run/mercury/one.sock"));
+        let second = path_for_local_endpoint(Path::new("/run/mercury/two.sock"));
         assert_eq!(first, again);
         assert_ne!(first, second);
     }
@@ -95,7 +95,7 @@ mod tests {
     #[test]
     fn concurrent_stores_leave_complete_preferences() {
         let path = std::env::temp_dir().join(format!(
-            "herdr-shell-concurrent-preferences-{}.json",
+            "mercury-shell-concurrent-preferences-{}.json",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn repeated_store_replaces_existing_preferences() {
         let path = std::env::temp_dir().join(format!(
-            "herdr-shell-preferences-{}.json",
+            "mercury-shell-preferences-{}.json",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);

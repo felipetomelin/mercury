@@ -5,6 +5,7 @@ use unicode_width::UnicodeWidthStr;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct TextEditor {
     text: String,
+    multiline: bool,
     cursor: usize,
     replace_on_type: bool,
     killed: String,
@@ -34,6 +35,21 @@ impl TextEditor {
         let mut editor = Self::default();
         editor.insert(text);
         editor.replace_on_type = replace_on_type;
+        editor
+    }
+
+    pub fn with_caret(&self) -> String {
+        let mut text = self.text.clone();
+        text.insert(self.cursor, '▏');
+        text
+    }
+
+    pub fn multiline(text: &str) -> Self {
+        let mut editor = Self {
+            multiline: true,
+            ..Self::default()
+        };
+        editor.insert(text);
         editor
     }
 
@@ -75,9 +91,10 @@ impl TextEditor {
                     if chars.peek() == Some(&'\n') {
                         chars.next();
                     }
-                    normalized.push(' ');
+                    normalized.push(if self.multiline { '\n' } else { ' ' });
                 }
-                '\n' | '\t' => normalized.push(' '),
+                '\n' => normalized.push(if self.multiline { '\n' } else { ' ' }),
+                '\t' => normalized.push(' '),
                 ch if !ch.is_control() => normalized.push(ch),
                 _ => {}
             }

@@ -39,7 +39,7 @@ pub fn run_server() -> io::Result<()> {
     ) {
         Ok(server) => server,
         Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
-            eprintln!("error: herdr server is already running");
+            eprintln!("error: mercury server is already running");
             eprintln!("api socket: {}", api::socket_path().display());
             std::process::exit(1);
         }
@@ -72,17 +72,24 @@ pub fn run_server() -> io::Result<()> {
         ) {
             Ok(server) => server,
             Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
-                eprintln!("error: herdr server is already running");
+                eprintln!("error: mercury server is already running");
                 eprintln!("client socket: {}", client_socket_path().display());
                 std::process::exit(1);
             }
             Err(err) => return Err(err),
         };
+        if let Err(error) = server.app.enable_cron() {
+            warn!(%error, "cron scheduler unavailable; retrying in background");
+            server.app.cron_retry_at = Some(Instant::now() + Duration::from_secs(1));
+        }
+        if let Err(error) = server.app.enable_learn() {
+            warn!(%error, "Learn worker unavailable; automatic review remains inactive");
+        }
 
         info!(
             api_socket = %api::socket_path().display(),
             client_socket = %client_socket_path().display(),
-            "herdr server started"
+            "mercury server started"
         );
         print_ready_message(&api::socket_path(), &client_socket_path());
         server.app.run_plugin_startup_hooks();
@@ -162,7 +169,7 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
             &mut imports,
         )?;
         crate::server::handoff::report_restored(&mut received.stream)?;
-        if std::env::var("HERDR_TEST_HANDOFF_IMPORT_FAIL").as_deref() == Ok("after_restored") {
+        if std::env::var("MERCURY_TEST_HANDOFF_IMPORT_FAIL").as_deref() == Ok("after_restored") {
             return Err(io::Error::other(
                 "test handoff import failure after restored",
             ));
@@ -189,6 +196,13 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
         server.app.assume_handoff_ownership();
         server.app.unpause_handoff_readers();
         server.pending_handoff_repaint_nudge = true;
+        if let Err(error) = server.app.enable_cron() {
+            warn!(%error, "cron scheduler will retry after handoff");
+            server.app.cron_retry_at = Some(Instant::now() + Duration::from_secs(1));
+        }
+        if let Err(error) = server.app.enable_learn() {
+            warn!(%error, "Learn worker unavailable after handoff; automatic review remains inactive");
+        }
         if let Err(err) = crate::server::handoff::report_owned(&mut received.stream) {
             warn!(err = %err, "failed to report handoff ownership; continuing as owner");
         }
@@ -209,19 +223,21 @@ fn run_handoff_import_server(_socket_path: &Path, _token: &str) -> io::Result<()
 }
 
 fn print_ready_message(api_socket: &Path, client_socket: &Path) {
-    eprintln!("herdr server running; you can use any herdr CLI command in another terminal.");
+    eprintln!("mercury server running; you can use any mercury CLI command in another terminal.");
     eprintln!("api socket: {}", api_socket.display());
     eprintln!("client socket: {}", client_socket.display());
     eprintln!(
         "logs: {}",
         crate::session::data_dir()
-            .join("herdr-server.log")
+            .join("mercury-server.log")
             .display()
     );
-    eprintln!("did you mean to open the Herdr TUI? run `herdr`; you do not need `herdr server`.");
+    eprintln!(
+        "did you mean to open the Mercury TUI? run `mercury`; you do not need `mercury server`."
+    );
 }
 
 /// Initialize logging for the server process.
 fn init_logging() {
-    crate::logging::init_file_logging("herdr-server.log");
+    crate::logging::init_file_logging("mercury-server.log");
 }

@@ -8,17 +8,21 @@ mod terminal_screen;
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use mercury_learn::policy::{Policy, Proposal, TargetKind, TargetPolicy};
+use mercury_learn::storage::{hash, Storage};
+use mercury_learn::Changes;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde_json::Value;
 use support::{
     cleanup_test_base, client_shell_handshake, read_server_message, register_runtime_dir,
-    register_spawned_herdr_pid, unregister_spawned_herdr_pid, wait_for_client_shell_bootstrap,
+    register_spawned_mercury_pid, unregister_spawned_mercury_pid, wait_for_client_shell_bootstrap,
     wait_for_message_variant, wait_for_message_variants, wait_for_socket, wait_until,
     CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL, SERVER_MESSAGE_PANE_SURFACE,
     SERVER_MESSAGE_PANE_SURFACE_PATCH, SERVER_MESSAGE_SEMANTIC_NOTIFICATION,
@@ -31,23 +35,23 @@ fn unique_test_dir() -> PathBuf {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     PathBuf::from(format!(
-        "/tmp/herdr-client-test-{}-{nanos}",
+        "/tmp/mercury-client-test-{}-{nanos}",
         std::process::id()
     ))
 }
 
-struct SpawnedHerdr {
+struct SpawnedMercury {
     _master: Option<Box<dyn MasterPty + Send>>,
     child: Box<dyn Child + Send + Sync>,
 }
 
-impl SpawnedHerdr {
+impl SpawnedMercury {
     fn close_master(&mut self) {
         drop(self._master.take());
     }
 }
 
-impl Drop for SpawnedHerdr {
+impl Drop for SpawnedMercury {
     fn drop(&mut self) {
         let pid = self.child.process_id();
         let _ = self.child.kill();
@@ -65,12 +69,12 @@ impl Drop for SpawnedHerdr {
                 thread::sleep(Duration::from_millis(20));
             }
 
-            unregister_spawned_herdr_pid(Some(pid));
+            unregister_spawned_mercury_pid(Some(pid));
         }
     }
 }
 
-fn cleanup_spawned_herdr(spawned: SpawnedHerdr, base: PathBuf) {
+fn cleanup_spawned_mercury(spawned: SpawnedMercury, base: PathBuf) {
     drop(spawned);
     cleanup_test_base(&base);
 }
@@ -86,7 +90,7 @@ fn spawn_client_process(
     config_home: &PathBuf,
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
-) -> SpawnedHerdr {
+) -> SpawnedMercury {
     spawn_client_process_with_args(config_home, runtime_dir, api_socket_path, &["client"])
 }
 
@@ -94,7 +98,7 @@ fn spawn_client_shell_process(
     config_home: &PathBuf,
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
-) -> SpawnedHerdr {
+) -> SpawnedMercury {
     spawn_client_process_with_args(config_home, runtime_dir, api_socket_path, &["client"])
 }
 
@@ -103,7 +107,7 @@ fn spawn_client_process_with_args(
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
     args: &[&str],
-) -> SpawnedHerdr {
+) -> SpawnedMercury {
     spawn_client_process_with_args_and_env(config_home, runtime_dir, api_socket_path, args, &[])
 }
 
@@ -113,7 +117,7 @@ fn spawn_client_process_with_args_and_env(
     api_socket_path: &PathBuf,
     args: &[&str],
     extra_env: &[(&str, &str)],
-) -> SpawnedHerdr {
+) -> SpawnedMercury {
     register_runtime_dir(runtime_dir);
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -124,25 +128,28 @@ fn spawn_client_process_with_args_and_env(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_mercury"));
     cmd.args(args);
-    cmd.env("HERDR_DISABLE_SOUND", "1");
+    cmd.env("MERCURY_DISABLE_SOUND", "1");
     cmd.env("XDG_STATE_HOME", runtime_dir.join("state"));
     cmd.env("XDG_CONFIG_HOME", config_home);
+    cmd.env("CLAUDE_CONFIG_DIR", config_home.join("fixture-claude"));
+    cmd.env("CODEX_HOME", config_home.join("fixture-codex"));
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-    cmd.env("HERDR_SOCKET_PATH", api_socket_path);
-    cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
+    cmd.env("XDG_DATA_HOME", runtime_dir.join("data"));
+    cmd.env("MERCURY_SOCKET_PATH", api_socket_path);
+    cmd.env_remove("MERCURY_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
-    cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("MERCURY_ENV");
     for (key, value) in extra_env {
         cmd.env(key, value);
     }
 
     let child = pair.slave.spawn_command(cmd).unwrap();
-    register_spawned_herdr_pid(child.process_id());
+    register_spawned_mercury_pid(child.process_id());
     drop(pair.slave);
 
-    SpawnedHerdr {
+    SpawnedMercury {
         _master: Some(pair.master),
         child,
     }
@@ -153,7 +160,7 @@ fn spawn_server(
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
     client_socket_path: &PathBuf,
-) -> SpawnedHerdr {
+) -> SpawnedMercury {
     spawn_server_with_config(
         config_home,
         runtime_dir,
@@ -169,7 +176,25 @@ fn spawn_server_with_config(
     api_socket_path: &PathBuf,
     _client_socket_path: &PathBuf,
     config: &str,
-) -> SpawnedHerdr {
+) -> SpawnedMercury {
+    spawn_server_with_config_and_env(
+        config_home,
+        runtime_dir,
+        api_socket_path,
+        _client_socket_path,
+        config,
+        &[],
+    )
+}
+
+fn spawn_server_with_config_and_env(
+    config_home: &PathBuf,
+    runtime_dir: &PathBuf,
+    api_socket_path: &PathBuf,
+    _client_socket_path: &PathBuf,
+    config: &str,
+    extra_env: &[(&str, &str)],
+) -> SpawnedMercury {
     fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
@@ -184,20 +209,26 @@ fn spawn_server_with_config(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_mercury"));
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
+    cmd.env("CLAUDE_CONFIG_DIR", config_home.join("fixture-claude"));
+    cmd.env("CODEX_HOME", config_home.join("fixture-codex"));
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-    cmd.env("HERDR_SOCKET_PATH", api_socket_path);
-    cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
+    cmd.env("XDG_DATA_HOME", runtime_dir.join("data"));
+    cmd.env("MERCURY_SOCKET_PATH", api_socket_path);
+    cmd.env_remove("MERCURY_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
-    cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("MERCURY_ENV");
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
 
     let child = pair.slave.spawn_command(cmd).unwrap();
-    register_spawned_herdr_pid(child.process_id());
+    register_spawned_mercury_pid(child.process_id());
     drop(pair.slave);
 
-    SpawnedHerdr {
+    SpawnedMercury {
         _master: Some(pair.master),
         child,
     }
@@ -246,10 +277,779 @@ fn first_pane_id_in_workspace(socket_path: &PathBuf, workspace_id: &str) -> Stri
 
 fn app_dir_name() -> &'static str {
     if cfg!(debug_assertions) {
-        "herdr-dev"
+        "mercury-dev"
     } else {
-        "herdr"
+        "mercury"
     }
+}
+
+#[test]
+fn cron_created_in_client_wizard_is_persisted_and_listed() {
+    let _lock = test_lock();
+    let logical_base = unique_test_dir();
+    let base = logical_base
+        .parent()
+        .unwrap()
+        .canonicalize()
+        .unwrap()
+        .join(logical_base.file_name().unwrap());
+    fs::create_dir_all(&base).unwrap();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
+    let server = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+    let client = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    let master = client._master.as_ref().unwrap();
+    let output = spawn_pty_drain(master.try_clone_reader().unwrap());
+    let screen = || {
+        let bytes = output
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .bytes
+            .clone();
+        terminal_screen::text(&bytes, 80, 24)
+    };
+    assert!(wait_until(
+        Duration::from_secs(8),
+        Duration::from_millis(25),
+        || { screen().contains("crons") }
+    ));
+    let mut input = master.take_writer().unwrap();
+    input.write_all(b"\x02C").unwrap();
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(25), || {
+            screen().contains("Crons ")
+        }),
+        "{}",
+        screen()
+    );
+    input.write_all(b"a").unwrap();
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(25), || {
+            screen().contains("novo agendamento")
+        }),
+        "{}",
+        screen()
+    );
+    input
+        .write_all(b"fixture-job\t\x1b[C\x1b[C\x1b[C\x1b[C\t60\t\t\t\x1b[C\x1b[C\t/bin/echo")
+        .unwrap();
+    input.write_all(&[0x13]).unwrap();
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(25), || {
+            screen().contains("revisar antes de salvar")
+        }),
+        "{}",
+        screen()
+    );
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(25), || {
+            screen().contains("Próxima:")
+        }),
+        "{}",
+        screen()
+    );
+    input.write_all(&[0x13]).unwrap();
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(25), || {
+            let jobs = send_json_request(
+                &api_socket,
+                &serde_json::json!({"id":"wizard-list","method":"cron.list","params":{}})
+                    .to_string(),
+            );
+            jobs["result"]["jobs"]
+                .as_array()
+                .is_some_and(|jobs| jobs.iter().any(|job| job["name"] == "fixture-job"))
+        }),
+        "wizard job was not saved; screen: {}",
+        screen()
+    );
+    assert!(
+        screen().contains("fixture-job"),
+        "job absent from UI: {}",
+        screen()
+    );
+    drop(input);
+    drop(client);
+    cleanup_spawned_mercury(server, base);
+}
+
+#[test]
+fn learn_tab_inspects_and_undoes_real_ledger_item_over_client_pty() {
+    let _lock = test_lock();
+    let logical_base = unique_test_dir();
+    let base = logical_base
+        .parent()
+        .unwrap()
+        .canonicalize()
+        .unwrap()
+        .join(logical_base.file_name().unwrap());
+    fs::create_dir_all(&base).unwrap();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
+    let target = base.join("AGENTS.md");
+    let before = b"private-before\n";
+    fs::write(&target, before).unwrap();
+    let policy = Policy::new(vec![TargetPolicy {
+        id: "instructions".into(),
+        path: target.clone(),
+        kind: TargetKind::Instructions,
+        max_bytes: 1024,
+    }])
+    .unwrap();
+    let storage = Storage::open(&config_home.join(app_dir_name()).join("learn")).unwrap();
+    let record = Changes::new(storage)
+        .apply(
+            &policy,
+            true,
+            Proposal {
+                target_id: "instructions".into(),
+                content: "private-after\n".into(),
+                reason: "private fixture reason".into(),
+                source: "test/session".into(),
+            },
+            &hash(before),
+        )
+        .unwrap();
+
+    let server = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+    let client = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    let master = client._master.as_ref().unwrap();
+    let output = spawn_pty_drain(master.try_clone_reader().unwrap());
+    let screen = || {
+        let bytes = output
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .bytes
+            .clone();
+        terminal_screen::text(&bytes, 80, 24)
+    };
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(25), || {
+            let text = screen();
+            text.contains("history") && text.contains("learn")
+        }),
+        "client initial frame: {}",
+        screen()
+    );
+    let mut input = master.take_writer().unwrap();
+    input.write_all(b"\x02U").unwrap();
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(25), || {
+            let text = screen();
+            text.contains("Learn") && text.contains("instructions")
+        }),
+        "Learn list: {}",
+        screen()
+    );
+    input.write_all(b"\r").unwrap();
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(25), || {
+            let text = screen();
+            text.contains("Backup privado: verificado") && text.contains("Diff: -1 +1")
+        }),
+        "Learn detail: {}",
+        screen()
+    );
+    assert!(!screen().contains("private-before"));
+    assert!(!screen().contains("private-after"));
+    assert!(!screen().contains("private fixture reason"));
+    assert!(
+        !screen().contains("MLearn"),
+        "stale pane text: {}",
+        screen()
+    );
+    assert!(screen().contains("Conteúdo do diff: [redigido]"));
+    assert!(screen().contains("aplicadas 1  conflitos 0  falhas 0  undo 0"));
+    let detail_frame = screen();
+    let hash_line = detail_frame
+        .lines()
+        .find(|line| line.contains("Hash anterior:"))
+        .unwrap();
+    assert!(hash_line.trim_end().ends_with('…'), "{hash_line}");
+    if std::env::var_os("MERCURY_LEARN_TUI_DUMP").is_some() {
+        eprintln!("Learn detail frame:\n{}", screen());
+    }
+    input.write_all(b"u").unwrap();
+    assert!(
+        wait_until(Duration::from_secs(5), Duration::from_millis(25), || {
+            screen().contains("Confirmar undo")
+        }),
+        "Learn undo confirmation: {}",
+        screen()
+    );
+    assert_eq!(fs::read(&target).unwrap(), b"private-after\n");
+    if std::env::var_os("MERCURY_LEARN_TUI_DUMP").is_some() {
+        eprintln!("Learn undo confirmation frame:\n{}", screen());
+    }
+    input.write_all(b"u").unwrap();
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(25), || {
+            fs::read(&target).ok().as_deref() == Some(&before[..])
+        }),
+        "Learn undo did not restore fixture; screen: {}",
+        screen()
+    );
+    let status = send_json_request(
+        &api_socket,
+        &serde_json::json!({"id":"learn-tui-status","method":"learn.show","params":{"change_id":record.id}}).to_string(),
+    );
+    assert_eq!(status["result"]["detail"]["change"]["status"], "undone");
+    drop(input);
+    drop(client);
+    cleanup_spawned_mercury(server, base);
+}
+
+#[test]
+fn headless_cron_usage_reaches_learn_metrics_tab_over_client_pty() {
+    let _lock = test_lock();
+    let logical_base = unique_test_dir();
+    let base = logical_base
+        .parent()
+        .unwrap()
+        .canonicalize()
+        .unwrap()
+        .join(logical_base.file_name().unwrap());
+    fs::create_dir_all(&base).unwrap();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
+    let target = base.join("AGENTS.md");
+    fs::write(&target, b"unchanged fixture\n").unwrap();
+    let fake_bin = base.join("bin");
+    fs::create_dir(&fake_bin).unwrap();
+    let fake_claude = fake_bin.join("claude");
+    fs::write(
+        &fake_claude,
+        "#!/bin/sh\nprintf '%s\\n' '{\"result\":\"fixture-done\",\"usage\":{\"input_tokens\":120,\"output_tokens\":30},\"total_cost_usd\":0.000125}'\n",
+    )
+    .unwrap();
+    fs::set_permissions(&fake_claude, fs::Permissions::from_mode(0o700)).unwrap();
+    let server_path = format!("{}:/usr/bin:/bin", fake_bin.display());
+    let isolated_data = base.join("data");
+    let isolated_data = isolated_data.to_str().unwrap();
+    let config = format!(
+        "onboarding = false\n[learn]\nenabled = true\nweekly = false\n[[learn.target]]\nid = 'instructions'\npath = '{}'\nkind = 'instructions'\nmax_bytes = 1024\n",
+        target.display()
+    );
+    let server = spawn_server_with_config_and_env(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        &client_socket,
+        &config,
+        &[("PATH", &server_path), ("XDG_DATA_HOME", isolated_data)],
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+
+    let add = send_json_request(
+        &api_socket,
+        &serde_json::json!({
+            "id": "add-observed",
+            "method": "cron.add",
+            "params": {"definition": {
+                "name": "observed-fixture",
+                "schedule": "every 2h",
+                "utc_offset": null,
+                "target": {"kind": "headless", "provider": "claude", "prompt": "fixture prompt",
+                    "prompt_files": [], "model": null, "effort": null, "skills": []},
+                "workdir": base,
+                "timeout_seconds": 10,
+                "enabled": true,
+                "catch_up": "skip",
+                "repeat_times": null,
+                "deliver": []
+            }}
+        })
+        .to_string(),
+    );
+    let job_id = add["result"]["job"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("cron.add failed: {add}"))
+        .to_owned();
+    let run = send_json_request(
+        &api_socket,
+        &serde_json::json!({"id":"run-observed","method":"cron.run",
+            "params":{"job_id":job_id}})
+        .to_string(),
+    );
+    assert!(
+        run["result"]["run_id"].is_string(),
+        "cron.run failed: {run}"
+    );
+    assert!(
+        wait_until(Duration::from_secs(10), Duration::from_millis(25), || {
+            let response = send_json_request(
+                &api_socket,
+                &serde_json::json!({"id":"metrics","method":"learn.status","params":{}})
+                    .to_string(),
+            );
+            response["result"]["status"]["recent_metrics"][0]["input_tokens"] == 120
+                && response["result"]["status"]["recent_metrics"][0]["output_tokens"] == 30
+        }),
+        "headless usage did not reach Learn"
+    );
+    let runs = send_json_request(
+        &api_socket,
+        &serde_json::json!({"id":"observed-runs","method":"cron.runs",
+            "params":{"job_id":job_id,"limit":1}})
+        .to_string(),
+    );
+    let output_path = runs["result"]["runs"][0]["output_path"]
+        .as_str()
+        .unwrap_or_else(|| panic!("headless run has no output path: {runs}"));
+    assert!(PathBuf::from(output_path).starts_with(base.join("data")));
+    assert_eq!(fs::read(&target).unwrap(), b"unchanged fixture\n");
+
+    let client = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    let master = client._master.as_ref().unwrap();
+    let output = spawn_pty_drain(master.try_clone_reader().unwrap());
+    let screen = || {
+        let bytes = output
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .bytes
+            .clone();
+        terminal_screen::text(&bytes, 80, 24)
+    };
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(25), || {
+            screen().contains("learn")
+        }),
+        "client initial frame: {}",
+        screen()
+    );
+    let mut input = master.take_writer().unwrap();
+    input.write_all(b"\x02U").unwrap();
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(25), || {
+            screen().contains("Learn ·")
+        }),
+        "Learn view absent: {}",
+        screen()
+    );
+    input.write_all(b"m").unwrap();
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(25), || {
+            let frame = screen();
+            frame.contains("dados insuficientes")
+                && frame.contains("120→30 tokens")
+                && frame.contains("$0.000125")
+                && frame.contains("ok")
+        }),
+        "observed metric absent from Learn tab: {}",
+        screen()
+    );
+    assert!(!screen().contains("fixture prompt"));
+    drop(input);
+    drop(client);
+    cleanup_spawned_mercury(server, base);
+}
+
+#[test]
+fn pane_cron_prompts_existing_fixture_agent_and_records_reply() {
+    let _lock = test_lock();
+    let logical_base = unique_test_dir();
+    let base = logical_base
+        .parent()
+        .unwrap()
+        .canonicalize()
+        .unwrap()
+        .join(logical_base.file_name().unwrap());
+    fs::create_dir_all(&base).unwrap();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
+    let fake_bin = base.join("bin");
+    fs::create_dir(&fake_bin).unwrap();
+    let receipt = base.join("received-prompt");
+    let fake_codex = fake_bin.join("codex");
+    fs::write(
+        &fake_codex,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = app-server ]; then exit 1; fi\n\"{}\" pane report-agent \"$MERCURY_PANE_ID\" --source fake-cron --agent codex --state idle >/dev/null 2>&1\nIFS= read -r task || exit 0\nprintf '%s\\n' \"$task\" >> \"{}\"\n\"{}\" pane report-agent \"$MERCURY_PANE_ID\" --source fake-cron --agent codex --state working >/dev/null 2>&1\n/bin/sleep 1\nprintf 'CRON_PANE_OK\\n'\n\"{}\" pane report-agent \"$MERCURY_PANE_ID\" --source fake-cron --agent codex --state idle >/dev/null 2>&1\nread pause\n",
+            env!("CARGO_BIN_EXE_mercury"),
+            receipt.display(),
+            env!("CARGO_BIN_EXE_mercury"),
+            env!("CARGO_BIN_EXE_mercury")
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&fake_codex, fs::Permissions::from_mode(0o700)).unwrap();
+    let server_path = format!("{}:/usr/bin:/bin", fake_bin.display());
+    let isolated_data = base.join("data");
+    let isolated_data = isolated_data.to_str().unwrap();
+    let server = spawn_server_with_config_and_env(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        &client_socket,
+        "onboarding = false\n[terminal]\ndefault_shell = '/bin/sh'\nshell_mode = 'non_login'\n",
+        &[("PATH", &server_path), ("XDG_DATA_HOME", isolated_data)],
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    let workspace = send_json_request(
+        &api_socket,
+        &serde_json::json!({"id":"workspace","method":"workspace.create",
+            "params":{"cwd":base,"focus":true}})
+        .to_string(),
+    );
+    let pane_id = workspace["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("workspace.create failed: {workspace}"))
+        .to_owned();
+    let mut last_start = Value::Null;
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(50), || {
+            last_start = send_json_request(
+                &api_socket,
+                &serde_json::json!({"id":"start-agent","method":"agent.start",
+                    "params":{"name":"cron-fixture","kind":"codex","pane_id":pane_id,
+                        "timeout_ms":8000}})
+                .to_string(),
+            );
+            if last_start["result"]["type"] == "agent_started" {
+                return true;
+            }
+            assert_eq!(
+                last_start["error"]["code"], "agent_pane_busy",
+                "{last_start}"
+            );
+            false
+        }),
+        "fixture agent could not start: {last_start}"
+    );
+    let mut last_agent = Value::Null;
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(50), || {
+            last_agent = send_json_request(
+                &api_socket,
+                &serde_json::json!({"id":"agent","method":"agent.get",
+                    "params":{"target":pane_id}})
+                .to_string(),
+            );
+            let agent = &last_agent["result"]["agent"];
+            agent["name"] == "cron-fixture"
+                && agent["agent"] == "codex"
+                && agent["interactive_ready"] == true
+                && agent["launch_pending"] != true
+        }),
+        "fixture agent did not become interactive: {last_agent}"
+    );
+
+    let prompt = "cron-fixture-private-task";
+    let add = send_json_request(
+        &api_socket,
+        &serde_json::json!({"id":"add-pane-cron","method":"cron.add",
+        "params":{"definition":{
+            "name":"pane-fixture","schedule":"every 2h","utc_offset":null,
+            "target":{"kind":"pane","pane_id":pane_id,"prompt":prompt},
+            "workdir":null,"timeout_seconds":10,"enabled":true,
+            "catch_up":"skip","repeat_times":null,"deliver":[]
+        }}})
+        .to_string(),
+    );
+    let job_id = add["result"]["job"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("cron.add failed: {add}"))
+        .to_owned();
+    let run = send_json_request(
+        &api_socket,
+        &serde_json::json!({"id":"run-pane-cron","method":"cron.run",
+            "params":{"job_id":job_id}})
+        .to_string(),
+    );
+    let run_id = run["result"]["run_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("cron.run failed: {run}"))
+        .to_owned();
+    if !wait_until(Duration::from_secs(10), Duration::from_millis(50), || {
+        fs::read_to_string(&receipt)
+            .ok()
+            .is_some_and(|text| text.lines().any(|line| line == prompt))
+    }) {
+        let runs = send_json_request(
+            &api_socket,
+            &serde_json::json!({"id":"failed-pane-runs","method":"cron.runs",
+                "params":{"job_id":job_id,"limit":1}})
+            .to_string(),
+        );
+        let agent = send_json_request(
+            &api_socket,
+            &serde_json::json!({"id":"failed-pane-agent","method":"agent.get",
+                "params":{"target":pane_id}})
+            .to_string(),
+        );
+        let pane = send_json_request(
+            &api_socket,
+            &serde_json::json!({"id":"failed-pane-read","method":"pane.read",
+                "params":{"pane_id":pane_id,"source":"recent","lines":20}})
+            .to_string(),
+        );
+        panic!("fixture agent did not receive pane Cron prompt: runs={runs}, agent={agent}, pane={pane}");
+    }
+    assert!(
+        wait_until(Duration::from_secs(10), Duration::from_millis(50), || {
+            let runs = send_json_request(
+                &api_socket,
+                &serde_json::json!({"id":"pane-runs","method":"cron.runs",
+                    "params":{"job_id":job_id,"limit":1}})
+                .to_string(),
+            );
+            runs["result"]["runs"][0]["id"] == run_id
+                && runs["result"]["runs"][0]["status"] == "success"
+        }),
+        "pane Cron did not finish successfully"
+    );
+    let runs = send_json_request(
+        &api_socket,
+        &serde_json::json!({"id":"finished-pane-runs","method":"cron.runs",
+            "params":{"job_id":job_id,"limit":1}})
+        .to_string(),
+    );
+    let output_path = runs["result"]["runs"][0]["output_path"]
+        .as_str()
+        .unwrap_or_else(|| panic!("pane run has no output path: {runs}"));
+    assert!(PathBuf::from(output_path).starts_with(base.join("data")));
+    let log = send_json_request(
+        &api_socket,
+        &serde_json::json!({"id":"pane-log","method":"cron.log",
+            "params":{"run_id":run_id}})
+        .to_string(),
+    );
+    assert!(log.to_string().contains("CRON_PANE_OK"), "cron.log: {log}");
+    assert_eq!(fs::read_to_string(&receipt).unwrap(), format!("{prompt}\n"));
+    cleanup_spawned_mercury(server, base);
+}
+
+#[test]
+fn claude_statusline_updates_pane_context_and_usage_warning_over_client_pty() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
+    let claude_home = base.join("claude");
+    let session_id = "11111111-2222-3333-4444-555555555599";
+    let transcript = claude_home
+        .join("projects")
+        .join(mercury_usage::locate::claude_project_slug(&base))
+        .join(format!("{session_id}.jsonl"));
+    fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    let timestamp = time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    fs::write(
+        &transcript,
+        format!(
+            "{}\n",
+            serde_json::json!({"type":"assistant","sessionId":session_id,
+                "requestId":"req-usage","timestamp":timestamp,
+                "message":{"id":"msg-usage","model":"claude-sonnet-5",
+                    "usage":{"input_tokens":10,"cache_creation_input_tokens":0,
+                        "cache_read_input_tokens":0,"output_tokens":500}}})
+        ),
+    )
+    .unwrap();
+    let fake_bin = base.join("bin");
+    fs::create_dir(&fake_bin).unwrap();
+    let fake_claude = fake_bin.join("claude");
+    fs::write(
+        &fake_claude,
+        format!(
+            "#!/bin/sh\n\"{}\" pane report-agent \"$MERCURY_PANE_ID\" --source mercury:claude --agent claude --state idle >/dev/null 2>&1\n\"{}\" pane report-agent-session \"$MERCURY_PANE_ID\" --source mercury:claude --agent claude --agent-session-id {} --agent-session-path \"{}\" >/dev/null 2>&1\nread pause\n",
+            env!("CARGO_BIN_EXE_mercury"),
+            env!("CARGO_BIN_EXE_mercury"),
+            session_id,
+            transcript.display(),
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&fake_claude, fs::Permissions::from_mode(0o700)).unwrap();
+    let server_path = format!("{}:/usr/bin:/bin", fake_bin.display());
+    let claude_home_str = claude_home.to_str().unwrap();
+    let server = spawn_server_with_config_and_env(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        &client_socket,
+        "onboarding = false\n[terminal]\ndefault_shell = '/bin/sh'\nshell_mode = 'non_login'\n[usage]\ncompact_at = 80\n[[usage.budget]]\nname = 'claude'\nscope = { provider = 'claude' }\nwindow = { kind = 'rolling', hours = 1 }\nlimit = { tokens = 1000 }\nwarn_at = [50]\n",
+        &[("PATH", &server_path), ("CLAUDE_CONFIG_DIR", claude_home_str)],
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    let workspace = send_json_request(
+        &api_socket,
+        &serde_json::json!({"id":"workspace","method":"workspace.create",
+            "params":{"cwd":base,"focus":true}})
+        .to_string(),
+    );
+    let pane_id = workspace["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("workspace.create failed: {workspace}"))
+        .to_owned();
+    let mut last_start = Value::Null;
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(50), || {
+            last_start = send_json_request(
+                &api_socket,
+                &serde_json::json!({"id":"start-agent","method":"agent.start",
+                    "params":{"name":"usage-fixture","kind":"claude","pane_id":pane_id,
+                        "timeout_ms":8000}})
+                .to_string(),
+            );
+            if last_start["result"]["type"] == "agent_started" {
+                return true;
+            }
+            assert_eq!(
+                last_start["error"]["code"], "agent_pane_busy",
+                "{last_start}"
+            );
+            false
+        }),
+        "fixture Claude could not start: {last_start}"
+    );
+    let mut last_agent = Value::Null;
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(50), || {
+            last_agent = send_json_request(
+                &api_socket,
+                &serde_json::json!({"id":"agent","method":"agent.get",
+                    "params":{"target":pane_id}})
+                .to_string(),
+            );
+            last_agent["result"]["agent"]["interactive_ready"] == true
+                && last_agent["result"]["agent"]["launch_pending"] != true
+        }),
+        "fixture Claude did not become interactive: {last_agent}"
+    );
+    let mut last_panes = Value::Null;
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(50), || {
+            last_panes = send_json_request(
+                &api_socket,
+                &serde_json::json!({"id":"panes","method":"pane.list","params":{}}).to_string(),
+            );
+            last_panes["result"]["panes"]
+                .as_array()
+                .is_some_and(|panes| {
+                    panes.iter().any(|pane| {
+                        pane["pane_id"] == pane_id && pane["agent_session"]["value"] == session_id
+                    })
+                })
+        }),
+        "fixture Claude session was not attached: {last_panes}"
+    );
+
+    let mut statusline = std::process::Command::new(env!("CARGO_BIN_EXE_mercury"))
+        .arg("statusline")
+        .env("MERCURY_PANE_ID", &pane_id)
+        .env("MERCURY_SOCKET_PATH", &api_socket)
+        .env("XDG_DATA_HOME", base.join("data"))
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let payload = serde_json::json!({
+        "session_id":session_id,"cwd":base,
+        "model":{"id":"claude-sonnet-5","display_name":"Sonnet 5"},
+        "cost":{"total_cost_usd":0.25},
+        "context_window":{"context_window_size":100000,"used_percentage":85.0},
+        "rate_limits":{"five_hour":{"used_percentage":61.0}}
+    });
+    statusline
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
+    assert!(statusline.wait().unwrap().success());
+
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+    let client = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    let master = client._master.as_ref().unwrap();
+    let output = spawn_pty_drain(master.try_clone_reader().unwrap());
+    let screen = || {
+        let bytes = output
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .bytes
+            .clone();
+        terminal_screen::text(&bytes, 80, 24)
+    };
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(25), || {
+            screen().contains("usage")
+        }),
+        "client initial frame: {}",
+        screen()
+    );
+    let mut input = master.take_writer().unwrap();
+    input.write_all(b"\x02u").unwrap();
+    assert!(
+        wait_until(Duration::from_secs(12), Duration::from_millis(50), || {
+            let frame = screen();
+            frame
+                .lines()
+                .any(|line| line.contains("five_hour") && line.contains("61%"))
+        }),
+        "account source absent from Usage frame: {}",
+        screen()
+    );
+    input.write_all(b"\x1b[6~").unwrap();
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(50), || {
+            let frame = screen();
+            frame.lines().any(|line| {
+                line.contains("usage-fixture") && line.contains("ctx") && line.contains("85%")
+            }) && frame
+                .lines()
+                .any(|line| line.contains("510 / 1k") && line.contains('⚠'))
+        }),
+        "scrollable session/budget absent: {}",
+        screen()
+    );
+    input.write_all(b"\x1b[H").unwrap();
+    let mut no_limits_statusline = std::process::Command::new(env!("CARGO_BIN_EXE_mercury"))
+        .arg("statusline")
+        .env("MERCURY_PANE_ID", &pane_id)
+        .env("MERCURY_SOCKET_PATH", &api_socket)
+        .env("XDG_DATA_HOME", base.join("data"))
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    no_limits_statusline
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            serde_json::json!({"session_id":session_id})
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap();
+    assert!(no_limits_statusline.wait().unwrap().success());
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(50), || {
+            let frame = screen();
+            frame.contains("Aguardando limites da conta") && !frame.contains("five_hour")
+        }),
+        "missing limits did not replace the session percentage: {}",
+        screen()
+    );
+    drop(input);
+    drop(client);
+    cleanup_spawned_mercury(server, base);
 }
 
 // ---------------------------------------------------------------------------
@@ -262,8 +1062,8 @@ fn client_connects_and_receives_pane_surface() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -277,7 +1077,7 @@ fn client_connects_and_receives_pane_surface() {
     wait_for_client_shell_bootstrap(&mut stream, Duration::from_secs(10))
         .expect("should receive the shell snapshot and pane surface");
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }
 
 #[test]
@@ -286,8 +1086,8 @@ fn direct_attach_initial_mouse_capture_follows_config() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
     let config_path = config_home.join(app_dir_name()).join("config.toml");
 
     let spawned_server = spawn_server_with_config(
@@ -399,7 +1199,7 @@ fn direct_attach_initial_mouse_capture_follows_config() {
     );
 
     drop(spawned_server);
-    cleanup_spawned_herdr(attach, base);
+    cleanup_spawned_mercury(attach, base);
 }
 
 #[test]
@@ -408,13 +1208,13 @@ fn client_sees_headless_startup_config_diagnostic() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let app_dir = if cfg!(debug_assertions) {
-        "herdr-dev"
+        "mercury-dev"
     } else {
-        "herdr"
+        "mercury"
     };
     fs::create_dir_all(config_home.join(app_dir)).unwrap();
     fs::write(
@@ -434,20 +1234,21 @@ fn client_sees_headless_startup_config_diagnostic() {
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_mercury"));
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", &config_home);
     cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
-    cmd.env("HERDR_SOCKET_PATH", &api_socket);
-    cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
+    cmd.env("XDG_DATA_HOME", runtime_dir.join("data"));
+    cmd.env("MERCURY_SOCKET_PATH", &api_socket);
+    cmd.env_remove("MERCURY_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
-    cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("MERCURY_ENV");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
-    register_spawned_herdr_pid(child.process_id());
+    register_spawned_mercury_pid(child.process_id());
     drop(pair.slave);
 
-    let spawned = SpawnedHerdr {
+    let spawned = SpawnedMercury {
         _master: Some(pair.master),
         child,
     };
@@ -466,14 +1267,14 @@ fn client_sees_headless_startup_config_diagnostic() {
     assert!(
         wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
             let output = read_output(&output);
-            output.contains("config.toml") && output.contains("herdr config check")
+            output.contains("config.toml") && output.contains("mercury config check")
         }),
         "client shell should render startup config diagnostic; output: {:?}",
         read_output(&output)
     );
 
     drop(spawned);
-    cleanup_spawned_herdr(client, base);
+    cleanup_spawned_mercury(client, base);
 }
 
 #[test]
@@ -484,26 +1285,26 @@ fn server_unreachable_shows_clear_error() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
 
-    fs::create_dir_all(config_home.join("herdr")).unwrap();
+    fs::create_dir_all(config_home.join("mercury")).unwrap();
     fs::create_dir_all(&runtime_dir).unwrap();
     register_runtime_dir(&runtime_dir);
     fs::write(
-        config_home.join("herdr/config.toml"),
+        config_home.join("mercury/config.toml"),
         "onboarding = false\n",
     )
     .unwrap();
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_herdr"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_mercury"))
         .arg("client")
-        .env("HERDR_DISABLE_SOUND", "1")
+        .env("MERCURY_DISABLE_SOUND", "1")
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_RUNTIME_DIR", &runtime_dir)
         .env("XDG_STATE_HOME", runtime_dir.join("state"))
-        .env("HERDR_SOCKET_PATH", &api_socket)
-        .env_remove("HERDR_CLIENT_SOCKET_PATH")
-        .env_remove("HERDR_ENV")
+        .env("MERCURY_SOCKET_PATH", &api_socket)
+        .env_remove("MERCURY_CLIENT_SOCKET_PATH")
+        .env_remove("MERCURY_ENV")
         .output()
         .expect("client command should run");
 
@@ -517,7 +1318,7 @@ fn server_unreachable_shows_clear_error() {
         "stderr should mention connection failure: {stderr}"
     );
     assert!(
-        stderr.contains("Is herdr server running?"),
+        stderr.contains("Is mercury server running?"),
         "stderr should include actionable guidance: {stderr}"
     );
     assert!(
@@ -536,8 +1337,8 @@ fn server_crash_after_attach_causes_lost_connection_error() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -572,7 +1373,7 @@ fn server_crash_after_attach_causes_lost_connection_error() {
                         seen = true;
                         break;
                     }
-                    if output.to_lowercase().contains("herdr:") {
+                    if output.to_lowercase().contains("mercury:") {
                         break;
                     }
                 }
@@ -720,8 +1521,8 @@ fn sigwinch_refreshes_host_palette_without_resizing() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
     let server = spawn_server_with_config(
         &config_home,
         &runtime_dir,
@@ -778,7 +1579,7 @@ fn sigwinch_refreshes_host_palette_without_resizing() {
 
     drop(writer);
     drop(client);
-    cleanup_spawned_herdr(server, base);
+    cleanup_spawned_mercury(server, base);
 }
 
 /// Current captured byte length, used as a watermark so a test can search only
@@ -843,7 +1644,7 @@ fn attach_thin_client(
     runtime_dir: &PathBuf,
     api_socket: &PathBuf,
     client_socket: &PathBuf,
-) -> (SpawnedHerdr, SpawnedHerdr, SharedOutput) {
+) -> (SpawnedMercury, SpawnedMercury, SharedOutput) {
     attach_thin_client_with_config(
         config_home,
         runtime_dir,
@@ -859,7 +1660,7 @@ fn attach_thin_client_with_config(
     api_socket: &PathBuf,
     client_socket: &PathBuf,
     config: &str,
-) -> (SpawnedHerdr, SpawnedHerdr, SharedOutput) {
+) -> (SpawnedMercury, SpawnedMercury, SharedOutput) {
     let spawned_server =
         spawn_server_with_config(config_home, runtime_dir, api_socket, client_socket, config);
     wait_for_socket(api_socket, Duration::from_secs(10));
@@ -886,7 +1687,7 @@ fn attach_thin_client_with_config(
             attached = true;
             break;
         }
-        if out.to_lowercase().contains("herdr:") {
+        if out.to_lowercase().contains("mercury:") {
             break;
         }
         thread::sleep(Duration::from_millis(30));
@@ -909,7 +1710,7 @@ fn federated_launch_opens_local_directly_while_saved_ssh_is_unavailable() {
         let base = unique_test_dir();
         let config_home = base.join("config");
         let runtime_dir = base.join("runtime");
-        let api_socket = runtime_dir.join("herdr.sock");
+        let api_socket = runtime_dir.join("mercury.sock");
         fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
         fs::write(
             config_home.join(app_dir_name()).join("config.toml"),
@@ -989,12 +1790,12 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
     let remote_config = base.join("remote-config");
     let remote_runtime = base.join("remote-runtime");
-    let remote_api = remote_runtime.join("herdr.sock");
-    let remote_client = remote_runtime.join("herdr-client.sock");
+    let remote_api = remote_runtime.join("mercury.sock");
+    let remote_client = remote_runtime.join("mercury-client.sock");
     let mut remote_server =
         spawn_server(&remote_config, &remote_runtime, &remote_api, &remote_client);
     wait_for_socket(&remote_api, Duration::from_secs(10));
@@ -1032,13 +1833,13 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
     let bin = base.join("bin");
     fs::create_dir_all(&bin).unwrap();
     fs::create_dir_all(base.join("home")).unwrap();
-    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_herdr"), bin.join("herdr")).unwrap();
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_mercury"), bin.join("mercury")).unwrap();
     let quote =
         |path: &std::path::Path| format!("'{}'", path.display().to_string().replace('\'', "'\\''"));
     let ssh_commands = base.join("ssh-commands");
     let bridge_pid = base.join("bridge-pid");
     fs::write(bin.join("ssh"), format!(
-        "#!/bin/sh\nexport HOME={} XDG_CONFIG_HOME={} XDG_RUNTIME_DIR={} HERDR_SOCKET_PATH={}\nunset HERDR_CLIENT_SOCKET_PATH HERDR_SESSION\nfor arg do last=\"$arg\"; done\nprintf '%s\\n' \"$last\" >> {}\ncase \"$last\" in *remote-client-bridge*) printf '%s\\n' \"$$\" > {};; esac\nexec /bin/sh -c \"$last\"\n",
+        "#!/bin/sh\nexport HOME={} XDG_CONFIG_HOME={} XDG_RUNTIME_DIR={} MERCURY_SOCKET_PATH={}\nunset MERCURY_CLIENT_SOCKET_PATH MERCURY_SESSION\nfor arg do last=\"$arg\"; done\nprintf '%s\\n' \"$last\" >> {}\ncase \"$last\" in *remote-client-bridge*) printf '%s\\n' \"$$\" > {};; esac\nexec /bin/sh -c \"$last\"\n",
         quote(&base.join("home")), quote(&remote_config), quote(&remote_runtime), quote(&remote_api), quote(&ssh_commands), quote(&bridge_pid),
     )).unwrap();
     fs::set_permissions(bin.join("ssh"), fs::Permissions::from_mode(0o700)).unwrap();
@@ -1282,8 +2083,8 @@ fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let mut server = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -1387,7 +2188,7 @@ fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
     );
 
     drop(server);
-    cleanup_spawned_herdr(client_b, base);
+    cleanup_spawned_mercury(client_b, base);
 }
 
 fn captured_window_titles(output: &SharedOutput) -> Vec<String> {
@@ -1457,8 +2258,8 @@ fn configured_window_title_tracks_all_tokens_and_focused_osc_only() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
     let (server, client, output) = attach_thin_client_with_config(
         &config_home,
         &runtime_dir,
@@ -1567,14 +2368,14 @@ fn configured_window_title_tracks_all_tokens_and_focused_osc_only() {
     wait_for_window_title(&output, "|W=space-a|T=tab-a|P=pane-a|O=hidden update");
 
     drop(server);
-    cleanup_spawned_herdr(client, base);
+    cleanup_spawned_mercury(client, base);
 }
 
 /// Polls until the client exits, then returns only the output captured after
 /// the `since` byte watermark. Panics if the client does not exit within the
 /// deadline.
 fn drain_until_client_exits(
-    thin_client: &mut SpawnedHerdr,
+    thin_client: &mut SpawnedMercury,
     output: &SharedOutput,
     since: usize,
 ) -> String {
@@ -1598,13 +2399,13 @@ fn drain_until_client_exits(
 /// client emits the mouse teardown after that point. The teardown markers also
 /// appear in normal attach output, so only bytes emitted after the trigger
 /// (past the watermark) count.
-fn assert_client_restores_terminal(trigger: impl FnOnce(&mut SpawnedHerdr, &mut SpawnedHerdr)) {
+fn assert_client_restores_terminal(trigger: impl FnOnce(&mut SpawnedMercury, &mut SpawnedMercury)) {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let (mut spawned_server, mut thin_client, pty_output) =
         attach_thin_client(&config_home, &runtime_dir, &api_socket, &client_socket);
@@ -1618,9 +2419,9 @@ fn assert_client_restores_terminal(trigger: impl FnOnce(&mut SpawnedHerdr, &mut 
         "client must emit mouse teardown after trigger; output after trigger: {output:?}"
     );
 
-    // SpawnedHerdr::Drop kills and reaps both processes with a bounded wait.
+    // SpawnedMercury::Drop kills and reaps both processes with a bounded wait.
     drop(spawned_server);
-    cleanup_spawned_herdr(thin_client, base);
+    cleanup_spawned_mercury(thin_client, base);
 }
 
 /// The `--remote` ssh-death path: killing the bridge closes the socket, the
@@ -1632,7 +2433,7 @@ fn client_restores_terminal_on_server_eof() {
     assert_client_restores_terminal(|server, _client| {
         // Kill the server unexpectedly; the client socket closes and the
         // client reader hits EOF, mirroring the ssh bridge dying under
-        // `herdr --remote`.
+        // `mercury --remote`.
         if let Some(pid) = server.child.process_id() {
             unsafe {
                 libc::kill(pid as libc::pid_t, libc::SIGKILL);
@@ -1655,7 +2456,7 @@ fn client_restores_terminal_on_sighup() {
     });
 }
 
-fn read_until_client_attaches(client: &SpawnedHerdr) -> String {
+fn read_until_client_attaches(client: &SpawnedMercury) -> String {
     let master = client._master.as_ref().expect("thin client master");
     let fd = master.as_raw_fd().expect("thin client PTY file descriptor");
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
@@ -1696,8 +2497,8 @@ fn client_exits_cleanly_when_terminal_and_transport_hang_up() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let mut spawned_server = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -1740,7 +2541,7 @@ fn client_exits_cleanly_when_terminal_and_transport_hang_up() {
     };
 
     drop(spawned_server);
-    cleanup_spawned_herdr(thin_client, base);
+    cleanup_spawned_mercury(thin_client, base);
 
     let status = status.expect("thin client should exit after terminal and transport hang up");
     assert!(
@@ -1755,8 +2556,8 @@ fn client_exits_cleanly_when_terminal_hangs_up() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned_server = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -1781,7 +2582,7 @@ fn client_exits_cleanly_when_terminal_hangs_up() {
     let server_response = ping_socket(&api_socket);
 
     drop(spawned_server);
-    cleanup_spawned_herdr(thin_client, base);
+    cleanup_spawned_mercury(thin_client, base);
 
     let status = status.unwrap_or_else(|| {
         panic!("thin client did not exit after PTY hangup; attach output: {attached_output:?}")
@@ -1802,8 +2603,8 @@ fn client_receives_pane_surface_after_pane_output() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -1859,7 +2660,7 @@ fn client_receives_pane_surface_after_pane_output() {
         "should receive a pane surface update after pane output"
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }
 
 #[test]
@@ -1868,8 +2669,8 @@ fn unavailable_restored_pane_keeps_saved_cwd_in_server() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
     let data_dir = config_home.join(app_dir_name());
     let missing_cwd = base.join("missing-cwd-for-test");
     let missing_cwd = missing_cwd.to_str().expect("test cwd should be UTF-8");
@@ -1975,7 +2776,7 @@ fn unavailable_restored_pane_keeps_saved_cwd_in_server() {
         .to_string(),
     );
     assert!(sent.get("error").is_none(), "{sent}");
-    cleanup_spawned_herdr(restarted, base);
+    cleanup_spawned_mercury(restarted, base);
 }
 
 #[test]
@@ -1986,8 +2787,8 @@ fn graceful_shutdown_sends_server_shutdown_to_client() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -2043,8 +2844,8 @@ fn client_receives_notify_on_agent_state_change() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("mercury.sock");
+    let client_socket = runtime_dir.join("mercury-client.sock");
 
     // Enable toast and sound in config so the server produces notifications.
     fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
@@ -2067,20 +2868,21 @@ fn client_receives_notify_on_agent_state_change() {
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_mercury"));
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", &config_home);
     cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
-    cmd.env("HERDR_SOCKET_PATH", &api_socket);
-    cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
+    cmd.env("XDG_DATA_HOME", runtime_dir.join("data"));
+    cmd.env("MERCURY_SOCKET_PATH", &api_socket);
+    cmd.env_remove("MERCURY_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
-    cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("MERCURY_ENV");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
-    register_spawned_herdr_pid(child.process_id());
+    register_spawned_mercury_pid(child.process_id());
     drop(pair.slave);
 
-    let spawned = SpawnedHerdr {
+    let spawned = SpawnedMercury {
         _master: Some(pair.master),
         child,
     };
@@ -2249,5 +3051,5 @@ fn client_receives_notify_on_agent_state_change() {
         "client should receive a semantic notification when a background pane transitions Working→Idle"
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_mercury(spawned, base);
 }

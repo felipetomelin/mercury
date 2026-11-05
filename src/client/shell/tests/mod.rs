@@ -14,11 +14,11 @@ pub(super) fn snapshot() -> ClientShellSnapshot {
         config_diagnostic: None,
         product_announcement: None,
         update_available: None,
-        update_install_command: "herdr update".into(),
+        update_install_command: "mercury update".into(),
         server_keybindings_toml: None,
         latest_release_notes_available: false,
         integration_updates_available: false,
-        worktree_directory: "/tmp/herdr-worktrees".into(),
+        worktree_directory: "/tmp/mercury-worktrees".into(),
         release_notes: None,
         focused_workspace_id: Some("ws_1".into()),
         focused_tab_id: Some("tab_1".into()),
@@ -63,6 +63,7 @@ pub(super) fn snapshot() -> ClientShellSnapshot {
         }],
         agents: Vec::new(),
         commands: Vec::new(),
+        usage: None,
     }
 }
 
@@ -249,14 +250,19 @@ mod agents_worktrees_notifications;
 mod chrome_context;
 mod close_tab;
 mod copy;
+mod crons_view;
 mod endpoint_requests;
 mod endpoints;
 mod graphics;
+mod history_view;
 #[path = "input.rs"]
 mod input_domain;
 mod keybindings_settings;
+mod knowledge_view;
+mod learn_view;
 mod link_hover;
 mod mobile;
 mod mouse_selection;
 mod popup_focus_projection;
 mod startup_overlays;
+mod usage_view;

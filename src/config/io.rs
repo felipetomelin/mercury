@@ -8,22 +8,26 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
     "advanced",
     "experimental",
     "keys",
+    "learn",
+    "knowledge",
     "onboarding",
     "remote",
+    "route",
     "server",
     "session",
     "terminal",
     "theme",
     "ui",
     "update",
+    "usage",
     "worktrees",
 ];
 
 pub fn app_dir_name() -> &'static str {
     if cfg!(debug_assertions) {
-        "herdr-dev"
+        "mercury-dev"
     } else {
-        "herdr"
+        "mercury"
     }
 }
 
@@ -150,7 +154,7 @@ impl Config {
         };
 
         match deserialize_with_ignored::<Config, _>(toml::Deserializer::new(&content)) {
-            Ok((config, ignored_keys)) => {
+            Ok((mut config, ignored_keys)) => {
                 let (unknown_sections, mut diagnostics) =
                     unknown_top_level_sections_from_str(&content);
                 diagnostics.extend(unknown_config_key_diagnostics(
@@ -163,6 +167,16 @@ impl Config {
                     None,
                 ));
                 diagnostics.extend(config.collect_diagnostics());
+                if let Err(err) = config.knowledge.validate() {
+                    diagnostics.push(format!(
+                        "invalid knowledge config: {err}; knowledge disabled"
+                    ));
+                    config.knowledge = mercury_knowledge::Config::default();
+                }
+                if let Err(err) = config.route.validate() {
+                    diagnostics.push(format!("invalid route config: {err}; routing disabled"));
+                    config.route = mercury_router::RouteConfig::default();
+                }
                 LoadedConfig {
                     config,
                     diagnostics,
@@ -239,7 +253,7 @@ pub fn config_diagnostic_summary(diagnostics: &[String]) -> Option<String> {
         ""
     };
 
-    Some(format!("{target}{impact}; herdr config check"))
+    Some(format!("{target}{impact}; mercury config check"))
 }
 
 pub fn load_live_config() -> Result<LoadedConfig, Vec<String>> {
@@ -375,8 +389,55 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         &mut invalid_sections,
         |section| config.remote = section,
     );
+    load_live_section(
+        table,
+        "usage",
+        "usage config",
+        &mut diagnostics,
+        &mut invalid_sections,
+        |section| config.usage = section,
+    );
+    load_live_section(
+        table,
+        "knowledge",
+        "knowledge config",
+        &mut diagnostics,
+        &mut invalid_sections,
+        |section| config.knowledge = section,
+    );
+    if let Err(err) = config.knowledge.validate() {
+        diagnostics.push(format!(
+            "invalid knowledge config: {err}; keeping current settings"
+        ));
+        invalid_sections.push("knowledge".into());
+        config.knowledge = mercury_knowledge::Config::default();
+    }
+    load_live_section(
+        table,
+        "learn",
+        "learn config",
+        &mut diagnostics,
+        &mut invalid_sections,
+        |section| config.learn = section,
+    );
+    load_live_section(
+        table,
+        "route",
+        "route config",
+        &mut diagnostics,
+        &mut invalid_sections,
+        |section| config.route = section,
+    );
+    if let Err(err) = config.route.validate() {
+        diagnostics.push(format!(
+            "invalid route config: {err}; keeping current route settings"
+        ));
+        invalid_sections.push("route".into());
+        config.route = mercury_router::RouteConfig::default();
+    }
 
     diagnostics.extend(config.theme.diagnostics());
+    diagnostics.extend(config.usage.resolved_budgets().1);
 
     Ok(LoadedConfig {
         config,
@@ -769,10 +830,10 @@ mod tests {
     #[test]
     fn remove_section_key_removes_matching_key_from_section() {
         let content =
-            "[ui.toast]\nenabled = true\ndelivery = \"herdr\"\n[ui.sound]\nenabled = true\n";
+            "[ui.toast]\nenabled = true\ndelivery = \"mercury\"\n[ui.sound]\nenabled = true\n";
         let updated = remove_section_key(content, "ui.toast", "enabled");
         assert!(!updated.contains("[ui.toast]\nenabled = true"));
-        assert!(updated.contains("delivery = \"herdr\""));
+        assert!(updated.contains("delivery = \"mercury\""));
         assert!(updated.contains("[ui.sound]\nenabled = true"));
     }
 
@@ -788,7 +849,7 @@ mod tests {
 
         assert_eq!(
             config_diagnostic_summary(&diagnostics).as_deref(),
-            Some("config.toml; herdr config check")
+            Some("config.toml; mercury config check")
         );
     }
 
@@ -801,7 +862,7 @@ mod tests {
 
         assert_eq!(
             config_diagnostic_summary(&diagnostics).as_deref(),
-            Some("config.toml has unknown keys; herdr config check")
+            Some("config.toml has unknown keys; mercury config check")
         );
     }
 
@@ -814,7 +875,7 @@ mod tests {
 
         assert_eq!(
             config_diagnostic_summary(&diagnostics).as_deref(),
-            Some("config.toml; herdr config check")
+            Some("config.toml; mercury config check")
         );
     }
 
@@ -827,7 +888,7 @@ mod tests {
 
         assert_eq!(
             config_diagnostic_summary(&diagnostics).as_deref(),
-            Some("config.toml invalid; using defaults; herdr config check")
+            Some("config.toml invalid; using defaults; mercury config check")
         );
     }
 
@@ -836,14 +897,14 @@ mod tests {
         let startup = vec!["config read error: permission denied; using defaults".to_string()];
         assert_eq!(
             config_diagnostic_summary(&startup).as_deref(),
-            Some("config.toml unreadable; using defaults; herdr config check")
+            Some("config.toml unreadable; using defaults; mercury config check")
         );
 
         let reload =
             vec!["config read error: permission denied; keeping current config".to_string()];
         assert_eq!(
             config_diagnostic_summary(&reload).as_deref(),
-            Some("config.toml unreadable; keeping current config; herdr config check")
+            Some("config.toml unreadable; keeping current config; mercury config check")
         );
     }
 
@@ -856,7 +917,7 @@ mod tests {
 
         assert_eq!(
             config_diagnostic_summary(&diagnostics).as_deref(),
-            Some("config.toml invalid; keeping current config; herdr config check")
+            Some("config.toml invalid; keeping current config; mercury config check")
         );
     }
 
@@ -864,7 +925,7 @@ mod tests {
     fn config_loaders_report_unreadable_path() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let path =
-            std::env::temp_dir().join(format!("herdr-config-unreadable-{}", std::process::id()));
+            std::env::temp_dir().join(format!("mercury-config-unreadable-{}", std::process::id()));
         std::fs::create_dir_all(&path).unwrap();
         std::env::set_var(CONFIG_PATH_ENV_VAR, &path);
 
@@ -922,7 +983,7 @@ name = "catppucin"
 delivery = "system"
 
 [ui.toast]
-delivery = "herdr"
+delivery = "mercury"
 "#,
         )
         .unwrap();
@@ -934,8 +995,33 @@ delivery = "herdr"
         assert!(loaded.invalid_sections.is_empty());
         assert_eq!(
             loaded.config.ui.toast.delivery,
-            super::super::ToastDelivery::Herdr
+            super::super::ToastDelivery::Mercury
         );
+    }
+
+    #[test]
+    fn learn_section_invalid_reload_fails_closed_without_affecting_siblings() {
+        let loaded = load_live_config_from_str(
+            "[learn]\nenabled = true\n[[learn.target]]\nid = 'wrong'\npath = '../AGENTS.md'\nkind = 'instructions'\nmax_bytes = 4096\n[ui]\nmouse_capture = false",
+        )
+        .unwrap();
+
+        assert_eq!(loaded.invalid_sections, vec!["learn"]);
+        assert!(!loaded.config.learn.enabled);
+        assert!(loaded.config.learn.targets.is_empty());
+        assert!(!loaded.config.ui.mouse_capture);
+    }
+
+    #[test]
+    fn learn_section_valid_reload_keeps_explicit_opt_in() {
+        let loaded = load_live_config_from_str(
+            "[learn]\nenabled = true\n[[learn.target]]\nid = 'instructions'\npath = '/tmp/AGENTS.md'\nkind = 'instructions'\nmax_bytes = 4096",
+        )
+        .unwrap();
+
+        assert!(loaded.invalid_sections.is_empty());
+        assert!(loaded.config.learn.enabled);
+        assert_eq!(loaded.config.learn.targets.len(), 1);
     }
 
     #[test]
@@ -993,7 +1079,7 @@ claude = [["terminal_title"]]
         assert!(!loaded.config.ui.mouse_capture);
         assert_eq!(
             loaded.config.ui.toast.delivery,
-            super::super::ToastDelivery::Herdr
+            super::super::ToastDelivery::Mercury
         );
         assert!(loaded
             .config
@@ -1044,7 +1130,7 @@ mouse_captur = true
     fn startup_config_accepts_legacy_agent_panel_scope_without_warning() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let path = std::env::temp_dir().join(format!(
-            "herdr-config-legacy-agent-panel-scope-{}.toml",
+            "mercury-config-legacy-agent-panel-scope-{}.toml",
             std::process::id()
         ));
         std::fs::write(&path, "[ui]\nagent_panel_scope = \"all\"\n").unwrap();
@@ -1062,7 +1148,7 @@ mouse_captur = true
     fn startup_config_load_warns_about_unknown_top_level_sections() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let path = std::env::temp_dir().join(format!(
-            "herdr-config-unknown-section-{}.toml",
+            "mercury-config-unknown-section-{}.toml",
             std::process::id()
         ));
         std::fs::write(
@@ -1180,7 +1266,7 @@ mouse_capture = false
     fn config_load_recovers_from_a_mid_file_bom() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let path = std::env::temp_dir().join(format!(
-            "herdr-config-mid-file-bom-{}.toml",
+            "mercury-config-mid-file-bom-{}.toml",
             std::process::id()
         ));
         std::fs::write(
@@ -1197,5 +1283,24 @@ mouse_capture = false
 
         assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
         assert_eq!(loaded.config.terminal.default_shell, "pwsh.exe");
+    }
+
+    #[test]
+    fn route_config_loads_and_invalid_pattern_is_disabled() {
+        let valid = load_live_config_from_str(
+            "[route]\nenabled = true\ndefault_provider = \"codex\"\n[[route.rule]]\npattern = \"review\"\nprovider = \"claude\"\nfallback = [\"codex\"]\n",
+        )
+        .unwrap();
+        assert!(valid.invalid_sections.is_empty(), "{:?}", valid.diagnostics);
+        assert!(valid.config.route.enabled);
+        assert_eq!(valid.config.route.rules.len(), 1);
+
+        let invalid = load_live_config_from_str(
+            "[route]\nenabled = true\n[[route.rule]]\npattern = \"[\"\nprovider = \"claude\"\n",
+        )
+        .unwrap();
+        assert_eq!(invalid.invalid_sections, vec!["route"]);
+        assert!(!invalid.config.route.enabled);
+        assert!(invalid.diagnostics[0].contains("invalid pattern"));
     }
 }

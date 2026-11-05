@@ -60,7 +60,7 @@ STAGED_PUBLISHED_MANIFESTS = {
     "grok": (
         "2026.09.18.2",
         "2026.09.18.1",
-        "0f31b111144900b02f303577d27587f72d58d8c505185a682bd7887f822316ee",
+        "e0099673cdbf50baf46db909b3f6a33d0e256fd93bda29e273c25dd623f5c367",
     ),
 }
 

@@ -253,16 +253,16 @@ impl App {
             crate::api::SOCKET_PATH_ENV_VAR.to_string(),
             crate::api::socket_path().display().to_string(),
         ));
-        env.push(("HERDR_ENV".to_string(), "1".to_string()));
-        env.push(("HERDR_PLUGIN_ID".to_string(), plugin.plugin_id.clone()));
+        env.push(("MERCURY_ENV".to_string(), "1".to_string()));
+        env.push(("MERCURY_PLUGIN_ID".to_string(), plugin.plugin_id.clone()));
         env.push((
-            "HERDR_PLUGIN_ENTRYPOINT_ID".to_string(),
+            "MERCURY_PLUGIN_ENTRYPOINT_ID".to_string(),
             entrypoint.to_string(),
         ));
-        env.push(("HERDR_PLUGIN_CONTEXT_JSON".to_string(), context_json));
+        env.push(("MERCURY_PLUGIN_CONTEXT_JSON".to_string(), context_json));
         if let Ok(current_exe) = crate::platform::launch_executable() {
             env.push((
-                "HERDR_BIN_PATH".to_string(),
+                "MERCURY_BIN_PATH".to_string(),
                 current_exe.display().to_string(),
             ));
         }
@@ -347,13 +347,13 @@ fn plugin_pane_protected_env_key(key: &str) -> bool {
     matches!(
         key,
         crate::api::SOCKET_PATH_ENV_VAR
-            | "HERDR_ENV"
-            | "HERDR_PLUGIN_ID"
-            | "HERDR_PLUGIN_ROOT"
-            | "HERDR_PLUGIN_CONFIG_DIR"
-            | "HERDR_PLUGIN_STATE_DIR"
-            | "HERDR_PLUGIN_ENTRYPOINT_ID"
-            | "HERDR_PLUGIN_CONTEXT_JSON"
-            | "HERDR_BIN_PATH"
+            | "MERCURY_ENV"
+            | "MERCURY_PLUGIN_ID"
+            | "MERCURY_PLUGIN_ROOT"
+            | "MERCURY_PLUGIN_CONFIG_DIR"
+            | "MERCURY_PLUGIN_STATE_DIR"
+            | "MERCURY_PLUGIN_ENTRYPOINT_ID"
+            | "MERCURY_PLUGIN_CONTEXT_JSON"
+            | "MERCURY_BIN_PATH"
     )
 }

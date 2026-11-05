@@ -1,0 +1,12 @@
+[package]
+name = "mercury-router"
+version = "0.0.0"
+edition = "2021"
+description = "Deterministic route selection for Mercury agents"
+publish = false
+
+[dependencies]
+mercury-usage = { path = "../mercury-usage" }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+time = "0.3.47"

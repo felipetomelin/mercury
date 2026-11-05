@@ -242,6 +242,7 @@ pub(super) fn read_terminal_grid_size() -> std::io::Result<(u16, u16)> {
     crossterm::terminal::window_size().map(|size| (size.columns, size.rows))
 }
 
+#[cfg(not(test))]
 fn set_sigpipe_disposition(handler: libc::sighandler_t) {
     let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
     action.sa_sigaction = handler;
@@ -254,10 +255,15 @@ fn set_sigpipe_disposition(handler: libc::sighandler_t) {
 }
 
 pub(crate) fn begin_cli_output() {
+    // Unit tests share one process with socket tests. Changing SIGPIPE here
+    // would make an unrelated writer terminate the entire test harness.
+    // The real CLI behavior is covered by tests/broken_pipe.rs.
+    #[cfg(not(test))]
     set_sigpipe_disposition(libc::SIG_DFL);
 }
 
 pub(crate) fn end_cli_output() {
+    #[cfg(not(test))]
     set_sigpipe_disposition(libc::SIG_IGN);
 }
 
@@ -284,7 +290,7 @@ pub(crate) fn create_remote_ssh_config_dir(control_socket_name: &str) -> std::io
     let mut path_fits = false;
     for base in bases {
         for attempt in 0..100 {
-            let dir = base.join(format!("herdr-ssh-{}-{attempt}", std::process::id()));
+            let dir = base.join(format!("mercury-ssh-{}-{attempt}", std::process::id()));
             if !fits_unix_socket_path(&dir.join(control_socket_name)) {
                 continue;
             }
@@ -304,7 +310,7 @@ pub(crate) fn create_remote_ssh_config_dir(control_socket_name: &str) -> std::io
         return Err(err);
     }
     let message = if path_fits {
-        "failed to create private herdr ssh config directory"
+        "failed to create private mercury ssh config directory"
     } else {
         "SSH control socket path exceeds the Unix socket length limit"
     };
@@ -352,7 +358,11 @@ pub(crate) fn remote_bridge_endpoint_path(readable_name: &str, short_name: &str)
 }
 
 pub(crate) fn remote_reattach_program(program: &str) -> String {
-    shell_quote(if program.is_empty() { "herdr" } else { program })
+    shell_quote(if program.is_empty() {
+        "mercury"
+    } else {
+        program
+    })
 }
 
 pub(crate) fn remote_reattach_argument(value: &str) -> String {

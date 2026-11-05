@@ -35,7 +35,7 @@ impl ConfigEdit<'_> {
             Self::ToastDelivery(delivery) => {
                 let value = match delivery {
                     super::ToastDelivery::Off => "\"off\"",
-                    super::ToastDelivery::Herdr => "\"herdr\"",
+                    super::ToastDelivery::Mercury => "\"mercury\"",
                     super::ToastDelivery::Terminal => "\"terminal\"",
                     super::ToastDelivery::System => "\"system\"",
                 };
@@ -79,8 +79,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn choosing_mercury_theme_persists_name_and_disables_auto_switch() {
+        let written = ConfigEdit::Theme("mercury").apply("[theme]\nauto_switch = true\n");
+        let parsed: toml::Value = toml::from_str(&written).unwrap();
+        assert_eq!(parsed["theme"]["name"].as_str(), Some("mercury"));
+        assert_eq!(parsed["theme"]["auto_switch"].as_bool(), Some(false));
+    }
+
+    #[test]
+    fn choosing_imported_theme_preserves_its_import_entry() {
+        let content = "[theme]\nname = \"catppuccin\"\n[[theme.import]]\nname = \"ocean\"\npath = \"/tmp/ocean.conf\"\nformat = \"ghostty\"\n";
+        let written = ConfigEdit::Theme("ocean").apply(content);
+        let parsed: toml::Value = toml::from_str(&written).unwrap();
+        assert_eq!(parsed["theme"]["name"].as_str(), Some("ocean"));
+        assert_eq!(parsed["theme"]["import"][0]["name"].as_str(), Some("ocean"));
+        assert_eq!(
+            parsed["theme"]["import"][0]["path"].as_str(),
+            Some("/tmp/ocean.conf")
+        );
+    }
+
+    #[test]
     fn update_file_at_does_not_move_a_leading_bom_into_the_file() {
-        let dir = std::env::temp_dir().join(format!("herdr-config-bom-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("mercury-config-bom-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
         std::fs::write(

@@ -10,6 +10,15 @@ impl ClientShellState {
             crate::input::KeybindMatch::Action(crate::input::KeybindAction::Detach) => {
                 outcome.detach = true;
             }
+            crate::input::KeybindMatch::Action(crate::input::KeybindAction::Usage) => {
+                self.toggle_usage_view(outcome);
+            }
+            crate::input::KeybindMatch::Action(crate::input::KeybindAction::Crons) => {
+                self.toggle_crons_view(outcome);
+            }
+            crate::input::KeybindMatch::Action(crate::input::KeybindAction::Learn) => {
+                self.toggle_learn_view(outcome);
+            }
             crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleSidebar) => {
                 self.sidebar_collapsed = !self.sidebar_collapsed;
                 self.sidebar_collapsed_manual = true;
@@ -507,6 +516,11 @@ impl ClientShellState {
         {
             return (false, Vec::new());
         }
+        if matches!(&pending.kind, PendingEndpointKind::CronList)
+            && self.crons_view.latest_list_request_id.as_deref() != Some(request_id)
+        {
+            return (false, Vec::new());
+        }
         if let PendingEndpointKind::PaneLinkResolve { target } = pending.kind {
             return self.complete_link_hover(target, result);
         }
@@ -519,6 +533,12 @@ impl ClientShellState {
             self.endpoint_notice_seen.remove(&timeout_key);
         }
         if let Err(error) = &result {
+            if matches!(
+                &pending.kind,
+                PendingEndpointKind::LearnList | PendingEndpointKind::LearnStatus
+            ) {
+                self.learn_view.load_error = true;
+            }
             if self
                 .pending_workspace_highlight
                 .as_ref()
@@ -527,10 +547,14 @@ impl ClientShellState {
                 self.pending_workspace_highlight = None;
             }
             let code = error.code.as_deref().unwrap_or("invalid_response");
-            if !matches!(
-                code,
-                "confirmation_required" | "stale_content" | "stale_target"
-            ) {
+            let retryable_history_busy = code == "agent_pane_busy"
+                && matches!(&pending.kind, PendingEndpointKind::HistoryAgentStart { attempts, .. } if *attempts < 30);
+            if !retryable_history_busy
+                && !matches!(
+                    code,
+                    "confirmation_required" | "stale_content" | "stale_target"
+                )
+            {
                 let (kind, notice_code, title, body) = match code {
                     "endpoint_timeout" => (
                         ClientEndpointNoticeKind::Timeout,
@@ -561,7 +585,464 @@ impl ClientShellState {
             }
         }
         match pending.kind {
+            PendingEndpointKind::Knowledge => {
+                self.knowledge_view.loading = false;
+                match result {
+                    Ok(crate::api::schema::ResponseResult::Knowledge { data }) => {
+                        self.knowledge_view.data = data
+                    }
+                    Err(e) => self.knowledge_view.error = Some(e.message),
+                    _ => self.knowledge_view.error = Some("invalid knowledge response".into()),
+                }
+                return (true, Vec::new());
+            }
             PendingEndpointKind::Generic => {}
+            PendingEndpointKind::LearnList => {
+                self.learn_view.loading = false;
+                if let Ok(crate::api::schema::ResponseResult::LearnList { changes }) = result {
+                    let selected_id = self
+                        .learn_view
+                        .changes
+                        .get(self.learn_view.selected)
+                        .map(|change| change.id.clone());
+                    let still_present = selected_id
+                        .as_deref()
+                        .is_some_and(|id| changes.iter().any(|change| change.id == id));
+                    self.learn_view.selected = selected_id
+                        .as_deref()
+                        .and_then(|id| changes.iter().position(|change| change.id == id))
+                        .unwrap_or(0);
+                    self.learn_view.changes = changes;
+                    self.learn_view.scroll = 0;
+                    if self.learn_view.page == LearnPage::Detail && !still_present {
+                        self.learn_view.page = LearnPage::List;
+                        self.learn_view.detail = None;
+                        self.learn_view.diff = None;
+                    }
+                }
+                if self.learn_view.refresh_pending && self.view == ClientShellView::Learn {
+                    self.learn_view.refresh_pending = false;
+                    let mut outcome = ClientShellInput::default();
+                    self.refresh_learn(&mut outcome);
+                    return (true, outcome.actions);
+                }
+                return (true, Vec::new());
+            }
+            PendingEndpointKind::LearnStatus => {
+                if let Ok(crate::api::schema::ResponseResult::LearnStatus { status }) = result {
+                    self.learn_view.status = Some(status);
+                }
+                return (true, Vec::new());
+            }
+            PendingEndpointKind::LearnShow { change_id } => {
+                if let Ok(crate::api::schema::ResponseResult::LearnShow { detail }) = result {
+                    if detail.change.id == change_id
+                        && self
+                            .learn_view
+                            .changes
+                            .get(self.learn_view.selected)
+                            .is_some_and(|change| change.id == change_id)
+                    {
+                        self.learn_view.detail = Some(detail);
+                    }
+                }
+                return (true, Vec::new());
+            }
+            PendingEndpointKind::LearnDiff { change_id } => {
+                if let Ok(crate::api::schema::ResponseResult::LearnDiff { diff }) = result {
+                    if diff.change.id == change_id
+                        && self
+                            .learn_view
+                            .changes
+                            .get(self.learn_view.selected)
+                            .is_some_and(|change| change.id == change_id)
+                    {
+                        self.learn_view.diff = Some(diff);
+                    }
+                }
+                return (true, Vec::new());
+            }
+            PendingEndpointKind::LearnUndo { change_id } => {
+                if let Ok(crate::api::schema::ResponseResult::LearnUndo { change }) = result {
+                    if change.id == change_id {
+                        if let Some(existing) = self
+                            .learn_view
+                            .changes
+                            .iter_mut()
+                            .find(|existing| existing.id == change_id)
+                        {
+                            *existing = change;
+                        }
+                        self.learn_view.confirm_undo_id = None;
+                        let mut outcome = ClientShellInput::default();
+                        self.refresh_learn(&mut outcome);
+                        if self.learn_view.page == LearnPage::Detail {
+                            self.request_learn_detail(change_id, &mut outcome);
+                        }
+                        return (true, outcome.actions);
+                    }
+                }
+                return (true, Vec::new());
+            }
+            PendingEndpointKind::HistorySearch => {
+                self.history_view.loading = false;
+                if let Ok(crate::api::schema::ResponseResult::HistorySearch { hits }) = result {
+                    let selected = self
+                        .history_view
+                        .hits
+                        .get(self.history_view.selected)
+                        .map(|hit| (hit.provider.as_str(), hit.session_id.as_str()));
+                    self.history_view.selected = selected
+                        .and_then(|(provider, id)| {
+                            hits.iter()
+                                .position(|hit| hit.provider == provider && hit.session_id == id)
+                        })
+                        .unwrap_or(0);
+                    self.history_view.hits = hits;
+                    self.history_view.scroll = 0;
+                }
+                if self.history_view.refresh_pending && self.view == ClientShellView::History {
+                    self.history_view.refresh_pending = false;
+                    let mut outcome = ClientShellInput::default();
+                    self.refresh_history(&mut outcome);
+                    return (true, outcome.actions);
+                }
+                return (true, Vec::new());
+            }
+            PendingEndpointKind::HistoryResolve {
+                provider,
+                session_id,
+            } => {
+                if self.view != ClientShellView::History {
+                    return (false, Vec::new());
+                }
+                let Ok(crate::api::schema::ResponseResult::HistoryResolve {
+                    target: Some(target),
+                }) = result
+                else {
+                    self.set_endpoint_error("History · sessão ou projeto original indisponível");
+                    return (true, Vec::new());
+                };
+                if target.provider != provider || target.session_id != session_id {
+                    self.set_endpoint_error("History · sessão mudou durante a consulta");
+                    return (true, Vec::new());
+                }
+                let mut outcome = ClientShellInput::default();
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::PaneSplit(crate::api::schema::PaneSplitParams {
+                        workspace_id: self
+                            .snapshot
+                            .as_deref()
+                            .and_then(|snapshot| snapshot.focused_workspace_id.clone()),
+                        target_pane_id: None,
+                        direction: crate::api::schema::SplitDirection::Right,
+                        ratio: None,
+                        cwd: Some(target.cwd),
+                        focus: true,
+                        right_click: crate::api::schema::PaneRightClickTarget::Mercury,
+                        env: HashMap::new(),
+                    }),
+                    PendingEndpointKind::HistoryPaneSplit {
+                        provider,
+                        session_id,
+                    },
+                    &mut outcome,
+                );
+                return (true, outcome.actions);
+            }
+            PendingEndpointKind::HistoryPaneSplit {
+                provider,
+                session_id,
+            } => {
+                let Ok(crate::api::schema::ResponseResult::PaneInfo { pane }) = result else {
+                    return (true, Vec::new());
+                };
+                let Some(session_ref) = crate::agent_resume::AgentSessionRef::id(&session_id)
+                else {
+                    self.set_endpoint_error("History · sessão inválida após criar pane");
+                    return (true, Vec::new());
+                };
+                let source = format!("mercury:{provider}");
+                let Some(plan) = crate::agent_resume::plan(&source, &provider, &session_ref) else {
+                    self.set_endpoint_error(
+                        "History · resume nativo indisponível; pane preservado",
+                    );
+                    return (true, Vec::new());
+                };
+                let pane_id = pane.pane_id;
+                let params = crate::api::schema::AgentStartParams {
+                    name: super::history_view::history_agent_name(),
+                    kind: provider,
+                    pane_id,
+                    args: plan.argv.into_iter().skip(1).collect(),
+                    timeout_ms: Some(30_000),
+                };
+                let mut outcome = ClientShellInput::default();
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::AgentStart(params.clone()),
+                    PendingEndpointKind::HistoryAgentStart {
+                        params,
+                        attempts: 0,
+                    },
+                    &mut outcome,
+                );
+                return (true, outcome.actions);
+            }
+            PendingEndpointKind::HistoryAgentStart { params, attempts } => {
+                if matches!(&result, Ok(crate::api::schema::ResponseResult::AgentStarted { agent, .. }) if agent.pane_id == params.pane_id)
+                {
+                    self.history_resume_retry = None;
+                    self.view = ClientShellView::Terminal;
+                    return (true, Vec::new());
+                }
+                if matches!(&result, Err(error) if error.code.as_deref() == Some("agent_pane_busy"))
+                    && attempts < 30
+                {
+                    self.history_resume_retry = Some(HistoryResumeRetry {
+                        params,
+                        attempts: attempts + 1,
+                        at: std::time::Instant::now() + std::time::Duration::from_millis(100),
+                    });
+                    return (true, Vec::new());
+                }
+                self.history_resume_retry = None;
+                self.set_endpoint_error(
+                    "History · agente não iniciou; pane preservado para inspeção",
+                );
+                return (true, Vec::new());
+            }
+            PendingEndpointKind::CronList => {
+                self.crons_view.loading = false;
+                return match result {
+                    Ok(crate::api::schema::ResponseResult::CronList { jobs }) => {
+                        self.crons_view.error = None;
+                        if let Some(confirmed_id) = self.crons_view.confirmed_job_id.clone() {
+                            if jobs.iter().any(|job| job.id == confirmed_id) {
+                                self.crons_view.notice =
+                                    Some("Crons · salvo e confirmado na listagem".into());
+                                self.crons_view.confirmed_job_id = None;
+                            } else {
+                                self.crons_view.notice = None;
+                                self.crons_view.error = Some(format!("Crons · servidor confirmou {confirmed_id}, mas a listagem não o retornou; verifique a instância ativa"));
+                            }
+                        }
+                        let selected_id = self
+                            .crons_view
+                            .jobs
+                            .get(self.crons_view.selected_job)
+                            .map(|job| job.id.as_str());
+                        let selected = selected_id
+                            .and_then(|id| jobs.iter().position(|job| job.id == id))
+                            .unwrap_or_else(|| {
+                                self.crons_view
+                                    .selected_job
+                                    .min(jobs.len().saturating_sub(1))
+                            });
+                        self.crons_view.jobs = jobs;
+                        self.crons_view.selected_job = selected;
+                        (true, Vec::new())
+                    }
+                    Err(error) => {
+                        self.crons_view.error = Some(format!("Crons · {}", error.message));
+                        (true, Vec::new())
+                    }
+                    _ => (true, Vec::new()),
+                };
+            }
+            PendingEndpointKind::CronRuns { job_id } => {
+                self.crons_view.loading = false;
+                return match result {
+                    Ok(crate::api::schema::ResponseResult::CronRuns { runs })
+                        if self.crons_view.page == CronsPage::Runs
+                            && self
+                                .crons_view
+                                .jobs
+                                .get(self.crons_view.selected_job)
+                                .is_some_and(|job| job.id == job_id) =>
+                    {
+                        self.crons_view.runs = runs;
+                        self.crons_view.selected_run = 0;
+                        self.crons_view.scroll = 0;
+                        (true, Vec::new())
+                    }
+                    Err(error)
+                        if self.crons_view.page == CronsPage::Runs
+                            && self
+                                .crons_view
+                                .jobs
+                                .get(self.crons_view.selected_job)
+                                .is_some_and(|job| job.id == job_id) =>
+                    {
+                        self.crons_view.error =
+                            Some(format!("Crons · histórico: {}", error.message));
+                        (true, Vec::new())
+                    }
+                    _ => (true, Vec::new()),
+                };
+            }
+            PendingEndpointKind::CronDetail { job_id } => {
+                self.crons_view.loading = false;
+                return match result {
+                    Ok(crate::api::schema::ResponseResult::CronDefinition {
+                        job_id: returned_id,
+                        definition,
+                    }) if returned_id == job_id
+                        && self.crons_view.page == CronsPage::Runs
+                        && self
+                            .crons_view
+                            .jobs
+                            .get(self.crons_view.selected_job)
+                            .is_some_and(|job| job.id == job_id) =>
+                    {
+                        self.crons_view.definition = Some(definition);
+                        (true, Vec::new())
+                    }
+                    Err(error)
+                        if self.crons_view.page == CronsPage::Runs
+                            && self
+                                .crons_view
+                                .jobs
+                                .get(self.crons_view.selected_job)
+                                .is_some_and(|job| job.id == job_id) =>
+                    {
+                        self.crons_view.error = Some(format!("Crons · detalhe: {}", error.message));
+                        (true, Vec::new())
+                    }
+                    _ => (true, Vec::new()),
+                };
+            }
+            PendingEndpointKind::CronLog { run_id } => {
+                self.crons_view.loading = false;
+                return match result {
+                    Ok(crate::api::schema::ResponseResult::CronLog { text, .. })
+                        if self
+                            .crons_view
+                            .runs
+                            .get(self.crons_view.selected_run)
+                            .is_some_and(|run| run.id == run_id) =>
+                    {
+                        self.crons_view.log = Some(text);
+                        self.crons_view.scroll = 0;
+                        self.crons_view.page = CronsPage::Log;
+                        (true, Vec::new())
+                    }
+                    _ => (true, Vec::new()),
+                };
+            }
+            PendingEndpointKind::CronPreview { key } => {
+                self.cron_preview_result(key.clone(), result);
+                let mut outcome = ClientShellInput::default();
+                if self
+                    .crons_view
+                    .form
+                    .as_ref()
+                    .and_then(|f| f.key().ok())
+                    .as_ref()
+                    != Some(&key)
+                {
+                    self.request_cron_preview(&mut outcome);
+                }
+                return (true, outcome.actions);
+            }
+            PendingEndpointKind::CronFormSave => {
+                match result {
+                    Ok(crate::api::schema::ResponseResult::CronJob { job }) => {
+                        self.crons_view.confirmed_job_id = Some(job.id.clone());
+                        if let Some(existing) =
+                            self.crons_view.jobs.iter_mut().find(|j| j.id == job.id)
+                        {
+                            *existing = job;
+                        } else {
+                            self.crons_view.jobs.push(job);
+                        }
+                        self.crons_view.form = None;
+                        self.crons_view.page = CronsPage::Jobs;
+                        let mut outcome = ClientShellInput::default();
+                        self.refresh_crons(&mut outcome);
+                        return (true, outcome.actions);
+                    }
+                    other => {
+                        if let Some(f) = self.crons_view.form.as_mut() {
+                            f.submitting = false;
+                            f.error=Some(match other{Err(e)=>e.message,_=>"Resposta inesperada; confira a listagem antes de tentar novamente".into()});
+                        }
+                    }
+                }
+                return (true, Vec::new());
+            }
+            PendingEndpointKind::CronFormRemove { job_id } => {
+                self.crons_view.deleting_pending = false;
+                if matches!(result, Ok(crate::api::schema::ResponseResult::Ok {})) {
+                    self.crons_view.jobs.retain(|j| j.id != job_id);
+                    self.crons_view.deleting = None;
+                    self.crons_view.page = CronsPage::Jobs;
+                    self.crons_view.notice =
+                        Some("Agendamento excluído; histórico preservado".into());
+                    let mut outcome = ClientShellInput::default();
+                    self.refresh_crons(&mut outcome);
+                    return (true, outcome.actions);
+                }
+                self.crons_view.error = Some(match result {
+                    Err(e) => e.message,
+                    _ => "Exclusão não confirmada pelo servidor".into(),
+                });
+                return (true, Vec::new());
+            }
+            PendingEndpointKind::CronMutation => match result {
+                Ok(result) => {
+                    self.crons_view.error = None;
+                    if let crate::api::schema::ResponseResult::CronJob { job } = result {
+                        if let Some(existing) = self
+                            .crons_view
+                            .jobs
+                            .iter_mut()
+                            .find(|existing| existing.id == job.id)
+                        {
+                            *existing = job;
+                        } else {
+                            self.crons_view.confirmed_job_id = Some(job.id.clone());
+                            self.crons_view.notice =
+                                Some("Crons · servidor confirmou; verificando listagem…".into());
+                            self.crons_view.jobs.push(job);
+                        }
+                    }
+                    let mut outcome = ClientShellInput::default();
+                    self.refresh_crons(&mut outcome);
+                    return (true, outcome.actions);
+                }
+                Err(error) => {
+                    self.crons_view.notice = None;
+                    self.crons_view.error = Some(format!("Crons · não salvo: {}", error.message));
+                    return (true, Vec::new());
+                }
+            },
+            PendingEndpointKind::CronGet { job_id } => {
+                return match result {
+                    Ok(crate::api::schema::ResponseResult::CronDefinition {
+                        job_id: returned_id,
+                        definition,
+                    }) if returned_id == job_id
+                        && self.crons_view.form.is_none()
+                        && self
+                            .crons_view
+                            .jobs
+                            .get(self.crons_view.selected_job)
+                            .is_some_and(|job| job.id == job_id) =>
+                    {
+                        let mut outcome = ClientShellInput::default();
+                        self.open_cron_form(Some((job_id, definition)), &mut outcome);
+                        (true, outcome.actions)
+                    }
+                    Err(error) => {
+                        self.crons_view.error = Some(format!(
+                            "Não foi possível abrir o editor: {}",
+                            error.message
+                        ));
+                        (true, Vec::new())
+                    }
+                    _ => (true, Vec::new()),
+                };
+            }
             PendingEndpointKind::PaneLinkResolve { .. } => unreachable!("handled above"),
             PendingEndpointKind::ProductAnnouncementDismiss { version, id } => {
                 return match result {

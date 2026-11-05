@@ -1606,6 +1606,18 @@ impl App {
         let report_is_newer = self
             .pane_terminal(ws_idx, pane_id)
             .is_some_and(|terminal| terminal.hook_report_is_newer(&params.source, params.seq));
+        let learn_provider = match (params.source.as_str(), agent_label.as_str()) {
+            ("mercury:claude", "claude") => Some(mercury_learn::transcript::Provider::Claude),
+            ("mercury:codex", "codex") => Some(mercury_learn::transcript::Provider::Codex),
+            _ => None,
+        };
+        let learn_report = learn_provider.and_then(|_| {
+            params
+                .agent_session_id
+                .as_ref()
+                .zip(params.agent_session_path.as_ref())
+                .map(|(session_id, path)| (session_id.clone(), std::path::PathBuf::from(path)))
+        });
         let session_ref = crate::agent_resume::session_ref_from_report(
             &params.source,
             &agent_label,
@@ -1624,6 +1636,34 @@ impl App {
         });
         let applied =
             report_is_newer && self.session_report_applied(ws_idx, pane_id, session_ref.as_ref());
+        if applied {
+            if let Some(provider) = learn_provider {
+                let key = (pane_id, provider);
+                self.learn_transcripts.remove(&key);
+                if let Some((session_id, path)) = learn_report.filter(|(session_id, path)| {
+                    crate::app::learn::ReviewTrigger::session_end(provider, session_id, path)
+                        .is_some()
+                }) {
+                    match self.learn_excluded_sessions.get(&key).map(String::as_str) {
+                        Some("*") => {
+                            self.learn_excluded_sessions.insert(key, session_id.clone());
+                        }
+                        Some(excluded) if excluded != session_id => {
+                            self.learn_excluded_sessions.remove(&key);
+                        }
+                        _ => {}
+                    }
+                    self.learn_transcripts.insert(
+                        key,
+                        crate::app::learn::ObservedTranscript {
+                            session_id,
+                            path,
+                            accepted_at: std::time::Instant::now(),
+                        },
+                    );
+                }
+            }
+        }
         self.report_agent_resume(
             id,
             ws_idx,
@@ -1636,7 +1676,7 @@ impl App {
     }
 
     /// A resume command belongs to the session it was reported with, so it is
-    /// kept only when Herdr accepted that session.
+    /// kept only when Mercury accepted that session.
     fn session_report_applied(
         &self,
         ws_idx: usize,
@@ -1649,7 +1689,7 @@ impl App {
         })
     }
 
-    fn pane_terminal(
+    pub(super) fn pane_terminal(
         &self,
         ws_idx: usize,
         pane_id: crate::layout::PaneId,
@@ -2997,9 +3037,9 @@ mod tests {
         app.state.ensure_test_terminals();
         app.state.workspaces[0].worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),
-            label: "herdr".into(),
-            repo_root: "/repo/herdr".into(),
-            checkout_path: "/repo/herdr-issue".into(),
+            label: "mercury".into(),
+            repo_root: "/repo/mercury".into(),
+            checkout_path: "/repo/mercury-issue".into(),
             is_linked_worktree: true,
         });
         app
@@ -3015,7 +3055,7 @@ mod tests {
                         .or_insert_with(|| {
                             crate::terminal::TerminalState::new(
                                 pane.attached_terminal_id.clone(),
-                                std::path::PathBuf::from("/herdr-test"),
+                                std::path::PathBuf::from("/mercury-test"),
                             )
                         });
                 }
@@ -4529,7 +4569,7 @@ mod tests {
         let _: SuccessResponse = serde_json::from_str(&response).unwrap();
 
         let mut official = metadata_params(pane_id.clone());
-        official.source = "herdr:pi".into();
+        official.source = "mercury:pi".into();
         official.seq = Some(200);
         let response = app.handle_pane_report_metadata("official".into(), official);
         let _: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -4537,7 +4577,7 @@ mod tests {
         let terminal = &app.state.terminals[&terminal_id];
         assert!(terminal.metadata_report_sequence_is_fresh("custom:pi-metadata", Some(1)));
         assert!(terminal.metadata_report_sequence_is_fresh("custom:pi-tokens", Some(1)));
-        assert!(terminal.metadata_report_sequence_is_fresh("herdr:pi", Some(1)));
+        assert!(terminal.metadata_report_sequence_is_fresh("mercury:pi", Some(1)));
 
         app.state
             .terminals
@@ -4627,7 +4667,7 @@ mod tests {
     fn pane_report_metadata_rejects_invalid_applies_to_source() {
         let (mut app, pane_id) = app_with_test_workspace();
         let mut params = metadata_params(pane_id);
-        params.applies_to_source = Some("herdr source".into());
+        params.applies_to_source = Some("mercury source".into());
 
         let response = app.handle_pane_report_metadata("req".into(), params);
 

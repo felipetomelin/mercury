@@ -71,6 +71,7 @@ fn default_capabilities() -> Option<ServerCapabilities> {
         live_handoff: crate::platform::capabilities().live_handoff,
         detached_server_daemon: crate::platform::current_process_is_detached_server_daemon(),
         endpoint_protocol_generation: Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
+        mercury_feature_generation: Some(crate::api::schema::server::MERCURY_FEATURE_GENERATION),
         surface_interest: true,
         health_check: true,
         ssh_agent_registration: false,
@@ -263,7 +264,7 @@ fn retired_pane_graphics_method_error(line: &str, id: &str) -> Option<ErrorRespo
 fn prepare_socket_path(path: &Path) -> std::io::Result<()> {
     crate::ipc::prepare_socket_path(path, |path| {
         format!(
-            "herdr is already running (socket busy at {})",
+            "mercury is already running (socket busy at {})",
             path.display()
         )
     })
@@ -644,10 +645,35 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::PaneRead(_) => "pane.read",
         Method::PaneReportAgent(_) => "pane.report_agent",
         Method::PaneReportAgentSession(_) => "pane.report_agent_session",
+        Method::LearnClaudeSessionEnd(_) => "learn.claude_session_end",
+        Method::LearnClaudeTurnEnd(_) => "learn.claude_turn_end",
+        Method::LearnList(_) => "learn.list",
+        Method::LearnStatus(_) => "learn.status",
+        Method::LearnShow(_) => "learn.show",
+        Method::LearnDiff(_) => "learn.diff",
+        Method::LearnUndo(_) => "learn.undo",
+        Method::LearnUndoDate(_) => "learn.undo_date",
         Method::PaneReportMetadata(_) => "pane.report_metadata",
         Method::PaneClearAgentAuthority(_) => "pane.clear_agent_authority",
         Method::PaneReleaseAgent(_) => "pane.release_agent",
         Method::PaneClose(_) => "pane.close",
+        Method::UsageReportStatusline(_) => "usage.report_statusline",
+        Method::UsageRefresh(_) => "usage.refresh",
+        Method::RoutePreview(_) => "route.preview",
+        Method::Knowledge(_) => "knowledge.request",
+        Method::HistorySearch(_) => "history.search",
+        Method::HistoryResolve(_) => "history.resolve",
+        Method::CronAdd(_) => "cron.add",
+        Method::CronPreview(_) => "cron.preview",
+        Method::CronList(_) => "cron.list",
+        Method::CronGet(_) => "cron.get",
+        Method::CronEdit(_) => "cron.edit",
+        Method::CronPause(_) => "cron.pause",
+        Method::CronRun(_) => "cron.run",
+        Method::CronRemove(_) => "cron.rm",
+        Method::CronRuns(_) => "cron.runs",
+        Method::CronLog(_) => "cron.log",
+        Method::CronDoctor(_) => "cron.doctor",
         Method::PopupClose(_) => "popup.close",
         Method::EventsSubscribe(_) => "events.subscribe",
         Method::EventsWait(_) => "events.wait",
@@ -751,7 +777,7 @@ mod windows_tests {
 
     fn local_stream_pair(name: &str) -> (LocalStream, LocalStream, PathBuf) {
         let path = std::env::temp_dir().join(format!(
-            "herdr-api-{name}-{}-{}.sock",
+            "mercury-api-{name}-{}-{}.sock",
             std::process::id(),
             Instant::now().elapsed().as_nanos()
         ));
@@ -1126,11 +1152,14 @@ mod tests {
     }
 
     fn unique_test_path(name: &str) -> PathBuf {
+        // macOS TMPDIR is long and Unix socket paths have a small fixed limit.
+        // Keep the diagnostic prefix short; pid + nanos provide uniqueness.
+        let name: String = name.chars().take(6).collect();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("herdr-{name}-{}-{nanos}", std::process::id()))
+        std::env::temp_dir().join(format!("mercury-{name}-{}-{nanos}", std::process::id()))
     }
 
     fn read_line(stream: &mut LocalStream) -> String {
@@ -1260,7 +1289,7 @@ mod tests {
     #[test]
     fn socket_path_prefers_explicit_env_override() {
         let _guard = env_lock().lock().unwrap();
-        let unique = format!("/tmp/herdr-test-{}.sock", std::process::id());
+        let unique = format!("/tmp/mercury-test-{}.sock", std::process::id());
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
         crate::session::clear_explicit_session_for_test();
         std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, &unique);
@@ -1281,7 +1310,7 @@ mod tests {
 
         let expected = config_home
             .join(crate::config::app_dir_name())
-            .join("herdr.sock");
+            .join("mercury.sock");
         assert_eq!(socket_path(), expected);
 
         std::env::remove_var("XDG_CONFIG_HOME");
@@ -1301,7 +1330,7 @@ mod tests {
             .join(crate::config::app_dir_name())
             .join("sessions")
             .join("work")
-            .join("herdr.sock");
+            .join("mercury.sock");
         assert_eq!(socket_path(), expected);
 
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
@@ -1440,6 +1469,7 @@ mod tests {
                 endpoint_protocol_generation: Some(
                     crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
                 ),
+                mercury_feature_generation: Some(crate::api::schema::MERCURY_FEATURE_GENERATION),
                 surface_interest: true,
                 health_check: true,
                 ssh_agent_registration: false,

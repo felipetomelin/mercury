@@ -115,6 +115,11 @@ pub enum AgentSidebarToken {
     Agent,
     TerminalTitle,
     TerminalTitleStripped,
+    Context,
+    ContextPct,
+    Tokens,
+    Cost,
+    Model,
     Custom(String),
     Styled {
         token: Box<AgentSidebarToken>,
@@ -200,7 +205,10 @@ impl RawSidebarToken {
                     return Err("sidebar tokens may contain at most 16 rules".into());
                 }
                 if !token.rules.is_empty()
-                    && matches!(token.token.as_str(), "state_icon" | "git_status")
+                    && matches!(
+                        token.token.as_str(),
+                        "state_icon" | "git_status" | "context"
+                    )
                 {
                     return Err("sidebar rules require a text-valued token".into());
                 }
@@ -279,6 +287,11 @@ fn agent_token_name(token: &AgentSidebarToken) -> String {
         AgentSidebarToken::Agent => "agent".into(),
         AgentSidebarToken::TerminalTitle => "terminal_title".into(),
         AgentSidebarToken::TerminalTitleStripped => "terminal_title_stripped".into(),
+        AgentSidebarToken::Context => "context".into(),
+        AgentSidebarToken::ContextPct => "context_pct".into(),
+        AgentSidebarToken::Tokens => "tokens".into(),
+        AgentSidebarToken::Cost => "cost".into(),
+        AgentSidebarToken::Model => "model".into(),
         AgentSidebarToken::Custom(name) => format!("${name}"),
         AgentSidebarToken::Styled { token, .. } => agent_token_name(token),
     }
@@ -338,6 +351,11 @@ impl<'de> Deserialize<'de> for AgentSidebarToken {
                 ("agent", Self::Agent),
                 ("terminal_title", Self::TerminalTitle),
                 ("terminal_title_stripped", Self::TerminalTitleStripped),
+                ("context", Self::Context),
+                ("context_pct", Self::ContextPct),
+                ("tokens", Self::Tokens),
+                ("cost", Self::Cost),
+                ("model", Self::Model),
             ],
         )
         .map_err(serde::de::Error::custom)?;
@@ -448,6 +466,11 @@ impl Default for AgentsSidebarConfig {
                     AgentSidebarToken::Tab,
                 ],
                 vec![AgentSidebarToken::Agent],
+                vec![
+                    AgentSidebarToken::Model,
+                    AgentSidebarToken::Context,
+                    AgentSidebarToken::Cost,
+                ],
             ],
             rows_by_agent: BTreeMap::new(),
             row_gap: DEFAULT_SIDEBAR_ROW_GAP,
@@ -499,6 +522,11 @@ mod tests {
                     AgentSidebarToken::Tab,
                 ],
                 vec![AgentSidebarToken::Agent],
+                vec![
+                    AgentSidebarToken::Model,
+                    AgentSidebarToken::Context,
+                    AgentSidebarToken::Cost,
+                ],
             ]
         );
         assert!(config.agents.rows_by_agent.is_empty());

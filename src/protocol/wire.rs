@@ -1,4 +1,4 @@
-//! Wire protocol for herdr server/client communication.
+//! Wire protocol for mercury server/client communication.
 //!
 //! Defines the message types, framing, version negotiation, and safety
 //! constraints for the binary protocol over local sockets.
@@ -566,7 +566,7 @@ pub enum ClientMessage {
         takeover: bool,
     },
 
-    /// Result of the one armed Herdr-owned direct Kitty transmission.
+    /// Result of the one armed Mercury-owned direct Kitty transmission.
     GraphicsTransmissionResult {
         transfer_id: u64,
         image_id: u32,
@@ -724,7 +724,7 @@ pub struct CellData {
     pub fg: u32,
     /// Background color as a packed u32.
     pub bg: u32,
-    /// Bitmask of style modifiers (bold, italic, etc.) plus Herdr extension bits.
+    /// Bitmask of style modifiers (bold, italic, etc.) plus Mercury extension bits.
     pub modifier: u16,
     /// Whether this cell should be skipped during diff-based rendering.
     pub skip: bool,
@@ -971,6 +971,128 @@ pub struct ClientShellSnapshot {
     pub panes: Vec<ClientShellPane>,
     pub agents: Vec<ClientShellAgent>,
     pub commands: Vec<ClientShellCommand>,
+    /// Account-level usage (provider limits, budgets); `None` until the
+    /// server has anything to report. See `src/app/usage.rs` and
+    /// `docs/dev/usage-ui-design.md` (D1, D4).
+    #[serde(default)]
+    pub usage: Option<ClientShellUsageSummary>,
+}
+
+/// Account-level usage state, independent of any single pane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ClientShellUsageSummary {
+    #[serde(default)]
+    pub activity: Option<ClientShellUsageActivity>,
+    /// Provider-reported limits (Claude statusline rate limits, Codex rollout
+    /// `rate_limits`), keyed by provider; absent provider means "not reported".
+    pub providers: Vec<ClientShellProviderUsage>,
+    /// Budget evaluation results (`[usage.budget]`); always empty until the
+    /// config/evaluation step of Fase 2 lands.
+    pub budgets: Vec<ClientShellUsageBudget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ClientShellUsageActivity {
+    pub tokens_today: u64,
+    pub cache_read_today: u64,
+    pub input_today: u64,
+    pub cost_microusd_today: Option<u64>,
+    /// Seven UTC days, oldest first, including today. Local logs may contain
+    /// previous logins; these counters are not account quota measurements.
+    pub daily_tokens: Vec<u64>,
+    pub last_activity: Vec<(String, i64)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientShellProviderUsage {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub observed_at_unix_ms: Option<i64>,
+    pub provider: String,
+    pub limits: Vec<ClientShellProviderLimit>,
+    pub credits: Option<ClientShellProviderCredits>,
+    pub plan_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientShellProviderLimit {
+    pub key: String,
+    /// Used share in permille (0..=1000+), rounded server-side so the
+    /// snapshot's `Eq` derive stays meaningful (no floats on the wire).
+    pub used_permille: u16,
+    pub window_minutes: Option<u64>,
+    pub resets_at_unix_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientShellProviderCredits {
+    pub has_credits: bool,
+    pub unlimited: bool,
+    pub balance: Option<String>,
+}
+
+/// One evaluated `[[usage.budget]]` entry (`Budget::evaluate` in
+/// `mercury_usage`; see `docs/dev/usage-ui-design.md` D7/D8).
+///
+/// Amounts are integers for the same reason as the rest of this snapshot
+/// (D4): the snapshot derives `Eq` so unrelated float jitter never forces a
+/// spurious re-render. `used_scaled`/`limit_scaled` are the budget's `used`/
+/// `limit` (`f64` in `mercury_usage::BudgetStatus`) scaled per `unit`:
+/// micro-USD for `Usd`, a raw token count for `Tokens`, permille (0..=1000+)
+/// of the configured percent cap for `Percent`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientShellUsageBudget {
+    pub name: String,
+    /// Human-readable scope: `"global"`, `"provider: claude"`,
+    /// `"workspace: <label>"`, or `"agent: <name>"`.
+    pub scope: String,
+    pub level: ClientShellBudgetLevel,
+    /// `used / limit` in permille (0..=1000+); `None` when the source
+    /// doesn't report this window (e.g. a Codex business plan on a
+    /// `provider` budget — `BudgetLevel::Unavailable`).
+    pub used_permille: Option<u16>,
+    pub used_scaled: u64,
+    pub limit_scaled: u64,
+    pub unit: ClientShellBudgetUnit,
+    /// Highest configured `warn_at` threshold currently reached, for display
+    /// and for the client's own warn-alert dedupe (per budget name+threshold,
+    /// mirroring the context-alert dedupe in `endpoint_agent_state.rs`).
+    pub warn_threshold: Option<u8>,
+    pub resets_at_unix_ms: Option<i64>,
+    /// Linear burn-rate forecast of when the limit is hit inside the window
+    /// (calendar `Usd` budgets only; see `mercury_usage::budget::forecast`).
+    pub forecast_exhausted_at_unix_ms: Option<i64>,
+    /// `true` when a `Usd` budget's scope includes token usage from a
+    /// session that never reported cost (D8: cost only comes from the
+    /// statusline bridge, which not every tracked session has).
+    pub partial: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientShellBudgetLevel {
+    Ok,
+    Warn,
+    Exceeded,
+    /// The source doesn't report this window (e.g. Codex business plans).
+    Unavailable,
+    /// A future level this client doesn't understand yet.
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientShellBudgetUnit {
+    Usd,
+    Tokens,
+    Percent,
+    /// A future unit this client doesn't understand yet.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1106,6 +1228,29 @@ pub struct ClientShellAgent {
     pub state_labels: Vec<(String, String)>,
     pub tokens: Vec<(String, String)>,
     pub focused: bool,
+    /// Token/context/cost usage for this pane's agent session; `None` when no
+    /// hook-reported session is tracked ("n/a", never a fabricated number).
+    /// See `src/app/usage.rs` and `docs/dev/usage-ui-design.md` (D1, D2, D4).
+    #[serde(default)]
+    pub usage: Option<ClientShellAgentUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientShellAgentUsage {
+    pub model: Option<String>,
+    /// Context window fill in permille (0..=1000+); `None` when the window
+    /// size isn't known.
+    pub context_permille: Option<u16>,
+    /// `true` when reported by the agent itself (statusline / Codex);
+    /// `false` for a transcript-derived estimate.
+    pub context_exact: bool,
+    pub context_window: Option<u64>,
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub tokens_cache_read: u64,
+    pub tokens_cache_write: u64,
+    pub cost_micros_usd: Option<u64>,
+    pub updated_at_unix_ms: Option<i64>,
 }
 
 /// Origin-relative geometry for one pane in a rendered pane surface.
@@ -1396,7 +1541,7 @@ pub struct SemanticNotification {
     pub workspace_id: Option<String>,
     pub tab_id: Option<String>,
     pub pane_id: Option<String>,
-    pub position: Option<crate::config::ToastHerdrPosition>,
+    pub position: Option<crate::config::ToastMercuryPosition>,
 }
 
 /// Messages sent from the server to the client over the client protocol socket.
@@ -1449,7 +1594,7 @@ pub enum ServerMessage {
 
     /// Set the foreground client's outer terminal window title.
     WindowTitle {
-        /// Sanitized title to write with OSC 0. `None` restores Herdr's default title.
+        /// Sanitized title to write with OSC 0. `None` restores Mercury's default title.
         title: Option<String>,
     },
 
@@ -1458,7 +1603,7 @@ pub enum ServerMessage {
 
     /// Whether the client should currently capture host mouse input.
     MouseCapture {
-        /// True when Herdr mouse UI is enabled or the focused pane app requests mouse reporting.
+        /// True when Mercury mouse UI is enabled or the focused pane app requests mouse reporting.
         enabled: bool,
         /// True only while the focused pane requests DEC SGR pixel mode 1016.
         sgr_pixels: bool,
@@ -1470,7 +1615,7 @@ pub enum ServerMessage {
         count: u16,
     },
 
-    /// One validated Herdr-owned Kitty regular-file RGBA transmission.
+    /// One validated Mercury-owned Kitty regular-file RGBA transmission.
     GraphicsFile {
         path: String,
         expected_len: u64,
@@ -1780,11 +1925,11 @@ pub fn check_client_version(client_version: u32) -> VersionCheck {
         VersionCheck::Compatible
     } else if client_version < PROTOCOL_VERSION {
         VersionCheck::Incompatible(format!(
-            "client version {client_version} is older than server version {PROTOCOL_VERSION}; please upgrade your herdr client"
+            "client version {client_version} is older than server version {PROTOCOL_VERSION}; please upgrade your mercury client"
         ))
     } else {
         VersionCheck::Incompatible(format!(
-            "client version {client_version} is newer than server version {PROTOCOL_VERSION}; please upgrade the herdr server"
+            "client version {client_version} is newer than server version {PROTOCOL_VERSION}; please upgrade the mercury server"
         ))
     }
 }
@@ -2234,8 +2379,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_shell_remote_altgr_dead_key_emits_only_composed_text() {
-        // Spanish ISO AltGr+4, then Space, captured in #3948:
-        // https://github.com/herdrdev/herdr/issues/3948#issuecomment-5633222390
+        // Spanish ISO AltGr+4, then Space, captured in a user bug report.
         let records = [
             ('4', ClientKeyKind::Press, 52, 5, 0, 9),
             ('4', ClientKeyKind::Release, 52, 5, 0, 9),
@@ -2827,11 +2971,11 @@ mod tests {
                 preview: false,
             }),
             update_available: Some("0.8.3".into()),
-            update_install_command: "herdr update".into(),
+            update_install_command: "mercury update".into(),
             server_keybindings_toml: Some("[keys]\nprefix = \"ctrl+a\"\n".into()),
             latest_release_notes_available: true,
             integration_updates_available: true,
-            worktree_directory: "/tmp/herdr-worktrees".into(),
+            worktree_directory: "/tmp/mercury-worktrees".into(),
             release_notes: Some(ClientShellReleaseNotes {
                 version: "0.8.3".into(),
                 body: "### New\n- Update ready".into(),
@@ -2889,6 +3033,7 @@ mod tests {
                 action: ClientShellCommandAction::Shell,
                 description: Some("deploy".into()),
             }],
+            usage: None,
         }));
         let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
         let (decoded, _): (ServerMessage, _) =
@@ -2918,7 +3063,7 @@ mod tests {
             workspace_id: Some("w1".into()),
             tab_id: Some("w1:t1".into()),
             pane_id: Some("w1:p1".into()),
-            position: Some(crate::config::ToastHerdrPosition::TopRight),
+            position: Some(crate::config::ToastMercuryPosition::TopRight),
         });
         let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
         let (decoded, _): (ServerMessage, _) =
@@ -2958,7 +3103,7 @@ mod tests {
 
     #[test]
     fn server_window_title_roundtrip() {
-        for title in [Some("herdr api".to_owned()), None] {
+        for title in [Some("mercury api".to_owned()), None] {
             let msg = ServerMessage::WindowTitle { title };
             let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
             let (decoded, _): (ServerMessage, _) =
@@ -3052,7 +3197,7 @@ mod tests {
         assert_eq!(client, decoded);
 
         let server = ServerMessage::GraphicsFile {
-            path: "/run/user/1000/herdr/source/frame".into(),
+            path: "/run/user/1000/mercury/source/frame".into(),
             expected_len: 4,
             image_id: 42,
             transfer_id: 7,

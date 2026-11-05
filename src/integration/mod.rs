@@ -7,6 +7,7 @@ mod env;
 mod file_ops;
 mod opencode_config;
 mod registry;
+mod statusline;
 mod targets;
 mod types;
 mod version;
@@ -15,14 +16,18 @@ pub(crate) use actions::{
     install_experimental_letta, install_target, uninstall_experimental_letta, uninstall_target,
 };
 #[cfg(test)]
+pub(crate) use command::shell_single_quote as shell_single_quote_for_tests;
+#[cfg(test)]
 pub(crate) use env::integration_env_lock;
 pub(crate) use env::{
-    apply_pane_base_env, HERDR_PANE_ID_ENV_VAR, HERDR_TAB_ID_ENV_VAR, HERDR_WORKSPACE_ID_ENV_VAR,
+    apply_pane_base_env, MERCURY_PANE_ID_ENV_VAR, MERCURY_TAB_ID_ENV_VAR,
+    MERCURY_WORKSPACE_ID_ENV_VAR,
 };
 pub(crate) use registry::{
     experimental_letta_integration_status, installed_integration_statuses,
     integration_recommendations, integration_target_label, print_outdated_update_notice,
 };
+pub(crate) use statusline::previous_command as statusline_previous_command;
 pub(crate) use types::{
     ExperimentalIntegrationStatus, IntegrationRecommendation, IntegrationStatus,
     IntegrationStatusKind,
@@ -33,47 +38,47 @@ pub(crate) use types::{
 /// agent registry provides first-class target registration.
 pub(crate) const EXPERIMENTAL_INTEGRATION_TARGET_LABELS: &[&str] = &["letta"];
 
-const PI_EXTENSION_INSTALL_NAME: &str = "herdr-agent-state.ts";
-const PI_EXTENSION_ASSET: &str = include_str!("assets/pi/herdr-agent-state.ts");
+const PI_EXTENSION_INSTALL_NAME: &str = "mercury-agent-state.ts";
+const PI_EXTENSION_ASSET: &str = include_str!("assets/pi/mercury-agent-state.ts");
 const PI_INTEGRATION_VERSION: u32 = 9;
-const OMP_EXTENSION_INSTALL_NAME: &str = "herdr-omp-agent-state.ts";
-const OMP_EXTENSION_ASSET: &str = include_str!("assets/omp/herdr-agent-state.ts");
+const OMP_EXTENSION_INSTALL_NAME: &str = "mercury-omp-agent-state.ts";
+const OMP_EXTENSION_ASSET: &str = include_str!("assets/omp/mercury-agent-state.ts");
 const OMP_INTEGRATION_VERSION: u32 = 10;
 const CLAUDE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "mercury-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "mercury-agent-state.sh"
 };
 const CLAUDE_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/claude/herdr-agent-state.ps1")
+    include_str!("assets/claude/mercury-agent-state.ps1")
 } else {
-    include_str!("assets/claude/herdr-agent-state.sh")
+    include_str!("assets/claude/mercury-agent-state.sh")
 };
-const CLAUDE_INTEGRATION_VERSION: u32 = 10;
+const CLAUDE_INTEGRATION_VERSION: u32 = 11;
 const CODEX_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "mercury-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "mercury-agent-state.sh"
 };
 const CODEX_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/codex/herdr-agent-state.ps1")
+    include_str!("assets/codex/mercury-agent-state.ps1")
 } else {
-    include_str!("assets/codex/herdr-agent-state.sh")
+    include_str!("assets/codex/mercury-agent-state.sh")
 };
-const CODEX_INTEGRATION_VERSION: u32 = 8;
+const CODEX_INTEGRATION_VERSION: u32 = 9;
 const KIMI_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "mercury-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "mercury-agent-state.sh"
 };
 const KIMI_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/kimi/herdr-agent-state.ps1")
+    include_str!("assets/kimi/mercury-agent-state.ps1")
 } else {
-    include_str!("assets/kimi/herdr-agent-state.sh")
+    include_str!("assets/kimi/mercury-agent-state.sh")
 };
 const KIMI_INTEGRATION_VERSION: u32 = 7;
-const KIMI_CONFIG_BLOCK_BEGIN: &str = "# >>> herdr kimi integration";
-const KIMI_CONFIG_BLOCK_END: &str = "# <<< herdr kimi integration";
+const KIMI_CONFIG_BLOCK_BEGIN: &str = "# >>> mercury kimi integration";
+const KIMI_CONFIG_BLOCK_END: &str = "# <<< mercury kimi integration";
 const KIMI_MIN_VERSION: &str = "0.14.0";
 const KIMI_ASK_USER_QUESTION_MATCHER: &str = "^AskUserQuestion$";
 const KIMI_OTHER_TOOL_MATCHER: &str = "^(?!AskUserQuestion$).*$";
@@ -104,14 +109,14 @@ const KIMI_HOOK_EVENTS: [(&str, Option<&str>, &str); 12] = [
     ("Interrupt", None, "idle"),
 ];
 const COPILOT_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "mercury-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "mercury-agent-state.sh"
 };
 const COPILOT_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/copilot/herdr-agent-state.ps1")
+    include_str!("assets/copilot/mercury-agent-state.ps1")
 } else {
-    include_str!("assets/copilot/herdr-agent-state.sh")
+    include_str!("assets/copilot/mercury-agent-state.sh")
 };
 const COPILOT_INTEGRATION_VERSION: u32 = 3;
 const COPILOT_HOOK_EVENTS: [&str; 1] = ["SessionStart"];
@@ -127,14 +132,14 @@ const COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS: [&str; 9] = [
     "sessionStart",
 ];
 const DEVIN_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "mercury-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "mercury-agent-state.sh"
 };
 const DEVIN_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/devin/herdr-agent-state.ps1")
+    include_str!("assets/devin/mercury-agent-state.ps1")
 } else {
-    include_str!("assets/devin/herdr-agent-state.sh")
+    include_str!("assets/devin/mercury-agent-state.sh")
 };
 const DEVIN_INTEGRATION_VERSION: u32 = 2;
 const DEVIN_HOOK_EVENTS: [(&str, &str); 6] = [
@@ -154,14 +159,14 @@ const DEVIN_REMOVED_LIFECYCLE_HOOK_EVENTS: [(&str, &str); 6] = [
     ("SessionEnd", "release"),
 ];
 const DROID_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "mercury-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "mercury-agent-state.sh"
 };
 const DROID_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/droid/herdr-agent-state.ps1")
+    include_str!("assets/droid/mercury-agent-state.ps1")
 } else {
-    include_str!("assets/droid/herdr-agent-state.sh")
+    include_str!("assets/droid/mercury-agent-state.sh")
 };
 const DROID_INTEGRATION_VERSION: u32 = 3;
 const DROID_HOOK_EVENTS: [(&str, &str); 1] = [("SessionStart", "session")];
@@ -176,57 +181,57 @@ const DROID_REMOVED_LIFECYCLE_HOOK_EVENTS: [(&str, &str); 9] = [
     ("PreCompact", "working"),
     ("SessionEnd", "release"),
 ];
-const OPENCODE_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
-const OPENCODE_PLUGIN_ASSET: &str = include_str!("assets/opencode/herdr-agent-state.js");
-const OPENCODE_TUI_PLUGIN_INSTALL_NAME: &str = "herdr-tui-session.js";
-const OPENCODE_TUI_PLUGIN_SPEC: &str = "./herdr-tui-session.js";
-const OPENCODE_TUI_PLUGIN_ASSET: &str = include_str!("assets/opencode/herdr-tui-session.js");
-const OPENCODE_V2_TUI_PLUGIN_DIR: &str = "herdr-opencode";
-const OPENCODE_V2_TUI_PLUGIN_SPEC: &str = "./herdr-opencode";
+const OPENCODE_PLUGIN_INSTALL_NAME: &str = "mercury-agent-state.js";
+const OPENCODE_PLUGIN_ASSET: &str = include_str!("assets/opencode/mercury-agent-state.js");
+const OPENCODE_TUI_PLUGIN_INSTALL_NAME: &str = "mercury-tui-session.js";
+const OPENCODE_TUI_PLUGIN_SPEC: &str = "./mercury-tui-session.js";
+const OPENCODE_TUI_PLUGIN_ASSET: &str = include_str!("assets/opencode/mercury-tui-session.js");
+const OPENCODE_V2_TUI_PLUGIN_DIR: &str = "mercury-opencode";
+const OPENCODE_V2_TUI_PLUGIN_SPEC: &str = "./mercury-opencode";
 const OPENCODE_V2_TUI_PLUGIN_ASSET: &str = include_str!("assets/opencode/tui.js");
 const OPENCODE_INTEGRATION_VERSION: u32 = 13;
-const KILO_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
-const KILO_PLUGIN_ASSET: &str = include_str!("assets/kilo/herdr-agent-state.js");
+const KILO_PLUGIN_INSTALL_NAME: &str = "mercury-agent-state.js";
+const KILO_PLUGIN_ASSET: &str = include_str!("assets/kilo/mercury-agent-state.js");
 const KILO_INTEGRATION_VERSION: u32 = 4;
-const HERMES_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state";
+const HERMES_PLUGIN_INSTALL_NAME: &str = "mercury-agent-state";
 const HERMES_PLUGIN_MANIFEST_INSTALL_NAME: &str = "plugin.yaml";
 const HERMES_PLUGIN_INIT_INSTALL_NAME: &str = "__init__.py";
 const HERMES_PLUGIN_MANIFEST_ASSET: &str = include_str!("assets/hermes/plugin.yaml");
 const HERMES_PLUGIN_INIT_ASSET: &str = include_str!("assets/hermes/__init__.py");
 const HERMES_INTEGRATION_VERSION: u32 = 5;
 const QODERCLI_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "mercury-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "mercury-agent-state.sh"
 };
 const QODERCLI_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/qodercli/herdr-agent-state.ps1")
+    include_str!("assets/qodercli/mercury-agent-state.ps1")
 } else {
-    include_str!("assets/qodercli/herdr-agent-state.sh")
+    include_str!("assets/qodercli/mercury-agent-state.sh")
 };
 const QODERCLI_INTEGRATION_VERSION: u32 = 3;
 const QODERCLI_HOOK_EVENTS: [(&str, &str); 1] = [("SessionStart", "session")];
 const QWEN_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-session.ps1"
+    "mercury-agent-session.ps1"
 } else {
-    "herdr-agent-session.sh"
+    "mercury-agent-session.sh"
 };
 const QWEN_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/qwen/herdr-agent-session.ps1")
+    include_str!("assets/qwen/mercury-agent-session.ps1")
 } else {
-    include_str!("assets/qwen/herdr-agent-session.sh")
+    include_str!("assets/qwen/mercury-agent-session.sh")
 };
 const QWEN_INTEGRATION_VERSION: u32 = 1;
 const QWEN_HOOK_EVENTS: [(&str, &str); 1] = [("SessionStart", "session")];
 const LETTA_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-session.ps1"
+    "mercury-agent-session.ps1"
 } else {
-    "herdr-agent-session.sh"
+    "mercury-agent-session.sh"
 };
 const LETTA_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/letta/herdr-agent-session.ps1")
+    include_str!("assets/letta/mercury-agent-session.ps1")
 } else {
-    include_str!("assets/letta/herdr-agent-session.sh")
+    include_str!("assets/letta/mercury-agent-session.sh")
 };
 const LETTA_INTEGRATION_VERSION: u32 = 1;
 const LETTA_HOOK_TIMEOUT_MS: u64 = 10_000;
@@ -245,30 +250,30 @@ const QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS: [(&str, &str); 12] = [
     ("SessionEnd", "release"),
 ];
 const CURSOR_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "mercury-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "mercury-agent-state.sh"
 };
 const CURSOR_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/cursor/herdr-agent-state.ps1")
+    include_str!("assets/cursor/mercury-agent-state.ps1")
 } else {
-    include_str!("assets/cursor/herdr-agent-state.sh")
+    include_str!("assets/cursor/mercury-agent-state.sh")
 };
 const CURSOR_INTEGRATION_VERSION: u32 = 1;
 #[cfg(windows)]
-const ANTIGRAVITY_CLI_HOOK_INSTALL_NAME: &str = "herdr-agent-state.ps1";
+const ANTIGRAVITY_CLI_HOOK_INSTALL_NAME: &str = "mercury-agent-state.ps1";
 #[cfg(not(windows))]
-const ANTIGRAVITY_CLI_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
+const ANTIGRAVITY_CLI_HOOK_INSTALL_NAME: &str = "mercury-agent-state.sh";
 #[cfg(windows)]
 const ANTIGRAVITY_CLI_HOOK_ASSET: &str =
-    include_str!("assets/antigravity_cli/herdr-agent-state.ps1");
+    include_str!("assets/antigravity_cli/mercury-agent-state.ps1");
 #[cfg(not(windows))]
 const ANTIGRAVITY_CLI_HOOK_ASSET: &str =
-    include_str!("assets/antigravity_cli/herdr-agent-state.sh");
+    include_str!("assets/antigravity_cli/mercury-agent-state.sh");
 const ANTIGRAVITY_CLI_INTEGRATION_VERSION: u32 = 3;
-/// Antigravity CLI keys `hooks.json` by hook name, so every Herdr entry lives
-/// under one Herdr-owned block that install rewrites and uninstall removes.
-const ANTIGRAVITY_CLI_HOOK_BLOCK_NAME: &str = "herdr";
+/// Antigravity CLI keys `hooks.json` by hook name, so every Mercury entry lives
+/// under one Mercury-owned block that install rewrites and uninstall removes.
+const ANTIGRAVITY_CLI_HOOK_BLOCK_NAME: &str = "mercury";
 const ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC: u64 = 10;
 /// `(event, reported action)`. Session-only: `PreInvocation` is the only event
 /// we need because it carries `conversationId`. The others cannot express
@@ -280,16 +285,16 @@ const ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC: u64 = 10;
 /// events accept a `matcher`/`hooks` wrapper, and sending one here would
 /// invalidate the whole file.
 const ANTIGRAVITY_CLI_HOOK_EVENTS: [(&str, &str); 1] = [("PreInvocation", "session")];
-const INTEGRATION_VERSION_MARKER: &str = "HERDR_INTEGRATION_VERSION=";
+const INTEGRATION_VERSION_MARKER: &str = "MERCURY_INTEGRATION_VERSION=";
 const MASTRACODE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "mercury-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "mercury-agent-state.sh"
 };
 const MASTRACODE_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/mastracode/herdr-agent-state.ps1")
+    include_str!("assets/mastracode/mercury-agent-state.ps1")
 } else {
-    include_str!("assets/mastracode/herdr-agent-state.sh")
+    include_str!("assets/mastracode/mercury-agent-state.sh")
 };
 const MASTRACODE_INTEGRATION_VERSION: u32 = 2;
 const MASTRACODE_HOOK_TIMEOUT_MS: u64 = 10_000;
@@ -309,15 +314,15 @@ const MASTRACODE_HOOK_EVENTS: [(&str, &str); 11] = [
     ("Stop", "idle"),
 ];
 const GROK_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "mercury-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "mercury-agent-state.sh"
 };
-const GROK_HOOK_CONFIG_INSTALL_NAME: &str = "herdr.json";
+const GROK_HOOK_CONFIG_INSTALL_NAME: &str = "mercury.json";
 const GROK_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/grok/herdr-agent-state.ps1")
+    include_str!("assets/grok/mercury-agent-state.ps1")
 } else {
-    include_str!("assets/grok/herdr-agent-state.sh")
+    include_str!("assets/grok/mercury-agent-state.sh")
 };
 const GROK_INTEGRATION_VERSION: u32 = 2;
 

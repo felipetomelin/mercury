@@ -13,6 +13,17 @@ pub(super) use overlays::{render_client_overlay, render_context_menu, render_glo
 pub(super) use sidebar::{render_collapsed_sidebar, render_sidebar, workspace_entries};
 pub(super) use tabs::{render_tab_bar, tab_bar_status_width};
 
+/// Semantic color is always paired with the original status label.
+pub(super) fn semantic_status_color(palette: &Palette, status: &str) -> ratatui::style::Color {
+    match status {
+        "success" | "succeeded" | "applied" | "validated" | "completed" => palette.green,
+        "failed" | "failure" | "error" | "conflict" | "blocked" => palette.red,
+        "running" | "queued" | "proposed" | "pending" | "unreviewed" => palette.yellow,
+        "undone" | "deprecated" | "skipped" | "paused" => palette.subtext0,
+        _ => palette.text,
+    }
+}
+
 pub(in crate::client::shell) fn render_sidebar_background(
     buffer: &mut Buffer,
     area: Rect,
@@ -248,6 +259,7 @@ pub(super) struct ShellRenderState<'a> {
     pub(super) reveal_navigation_workspace: &'a mut bool,
     pub(super) dragged_workspace_id: Option<&'a str>,
     pub(super) workspace_drop_indicator_row: Option<u16>,
+    pub(super) view: ClientShellView,
 }
 
 pub(super) fn render_shell(
@@ -318,6 +330,7 @@ pub(super) fn render_shell(
             state.tab_scroll,
             state.reveal_focused_tab,
             state.tab_drag_insert_index,
+            state.view,
             &mut hits,
         );
     }

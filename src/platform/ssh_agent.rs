@@ -216,7 +216,8 @@ mod tests {
 
     #[test]
     fn server_without_an_agent_leaves_local_pane_agent_setup_alone() {
-        let directory = std::env::temp_dir().join(format!("herdr-no-agent-{}", std::process::id()));
+        let directory =
+            std::env::temp_dir().join(format!("mercury-no-agent-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
         let stable = directory.join("agent");
         for inherited in [None, Some(PathBuf::new())] {
@@ -233,7 +234,7 @@ mod tests {
     #[test]
     fn closed_agent_listener_does_not_block_a_live_replacement() {
         let directory =
-            std::env::temp_dir().join(format!("herdr-dead-agent-{}", std::process::id()));
+            std::env::temp_dir().join(format!("mercury-dead-agent-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
         let stable = directory.join("agent");
         let a = directory.join("a");
@@ -265,7 +266,7 @@ mod tests {
         use std::os::fd::AsRawFd;
         use std::os::unix::net::UnixStream;
         let directory =
-            std::env::temp_dir().join(format!("herdr-busy-agent-{}", std::process::id()));
+            std::env::temp_dir().join(format!("mercury-busy-agent-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
         let a = directory.join("a");
         let b = directory.join("b");
@@ -286,7 +287,7 @@ mod tests {
     #[test]
     fn registration_preserves_the_supplied_socket_address() {
         let directory =
-            std::env::temp_dir().join(format!("herdr-agent-path-{}", std::process::id()));
+            std::env::temp_dir().join(format!("mercury-agent-path-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
         symlink(".", directory.join("alias")).unwrap();
         let _listener = UnixListener::bind(directory.join("upstream")).unwrap();
@@ -303,7 +304,7 @@ mod tests {
     #[test]
     fn socket_overrides_have_independent_agent_addresses() {
         let directory =
-            std::env::temp_dir().join(format!("herdr-agent-overrides-{}", std::process::id()));
+            std::env::temp_dir().join(format!("mercury-agent-overrides-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
         let a = directory.join("a");
         let b = directory.join("b");
@@ -324,7 +325,7 @@ mod tests {
     #[test]
     fn reconnect_and_overlapping_attachments_keep_a_stable_agent_address() {
         let directory =
-            std::env::temp_dir().join(format!("herdr-ssh-agent-{}", std::process::id()));
+            std::env::temp_dir().join(format!("mercury-ssh-agent-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
         let stable = directory.join("agent");
         let a = directory.join("a");

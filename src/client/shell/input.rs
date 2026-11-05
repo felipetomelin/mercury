@@ -440,6 +440,9 @@ impl ClientShellState {
     }
 
     pub(super) fn modal_paste_target_active(&self) -> bool {
+        if self.view == ClientShellView::Crons && self.crons_view.form.is_some() {
+            return true;
+        }
         if self.popup_pending
             || self.popup_input_target().is_some()
             || (self.overlay.is_none()
@@ -563,6 +566,12 @@ impl ClientShellState {
 
         match self.mode {
             ClientShellMode::Terminal => {
+                if self.view == ClientShellView::Crons
+                    && (self.crons_view.form.is_some() || self.crons_view.deleting.is_some())
+                {
+                    self.handle_crons_view_key(key, outcome);
+                    return None;
+                }
                 if let Some(binding) =
                     crate::input::resolve_direct_binding(&self.config.keybinds.keybinds, key)
                 {
@@ -572,6 +581,26 @@ impl ClientShellState {
                 if self.config.keybinds.matches_prefix(key) {
                     self.mode = ClientShellMode::Prefix;
                     outcome.repaint = true;
+                    return None;
+                }
+                if self.view == ClientShellView::Usage {
+                    self.handle_usage_view_key(key, outcome);
+                    return None;
+                }
+                if self.view == ClientShellView::Crons {
+                    self.handle_crons_view_key(key, outcome);
+                    return None;
+                }
+                if self.view == ClientShellView::Knowledge {
+                    self.handle_knowledge_key(key, outcome);
+                    return None;
+                }
+                if self.view == ClientShellView::History {
+                    self.handle_history_view_key(key, outcome);
+                    return None;
+                }
+                if self.view == ClientShellView::Learn {
+                    self.handle_learn_view_key(key, outcome);
                     return None;
                 }
                 self.focused_pane_id().map(ClientInputTarget::Pane)

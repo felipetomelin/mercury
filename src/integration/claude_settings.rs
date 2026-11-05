@@ -54,11 +54,11 @@ const HOOK_REMOVALS: &[HookRemoval] = &[
     },
     HookRemoval {
         event: "Stop",
-        actions: &["idle"],
+        actions: &["idle", "turn"],
     },
     HookRemoval {
         event: "SessionEnd",
-        actions: &["release"],
+        actions: &["release", "end"],
     },
 ];
 
@@ -81,15 +81,75 @@ pub(crate) fn install(content: &str, settings_path: &Path, hook_path: &Path) -> 
         Some(SESSION_START_MATCHER),
     )?;
 
-    if desired == original {
-        return Ok(content.to_string());
-    }
+    let with_start = if desired == original {
+        content.to_string()
+    } else {
+        rewrite(
+            content,
+            settings_path,
+            hook_path,
+            EditKind::Install,
+            &desired,
+        )?
+    };
+    let with_end = install_end(&with_start, settings_path, hook_path)?;
+    install_turn(&with_end, settings_path, hook_path)
+}
 
-    rewrite(
+fn install_end(content: &str, settings_path: &Path, hook_path: &Path) -> io::Result<String> {
+    install_extra_hook(
         content,
         settings_path,
         hook_path,
-        EditKind::Install,
+        "SessionEnd",
+        "end",
+        &["release", "end"],
+    )
+}
+
+fn install_turn(content: &str, settings_path: &Path, hook_path: &Path) -> io::Result<String> {
+    install_extra_hook(
+        content,
+        settings_path,
+        hook_path,
+        "Stop",
+        "turn",
+        &["idle", "turn"],
+    )
+}
+
+fn install_extra_hook(
+    content: &str,
+    settings_path: &Path,
+    hook_path: &Path,
+    event: &str,
+    action: &str,
+    removed_actions: &[&str],
+) -> io::Result<String> {
+    let mut desired = parse_value(content, settings_path)?;
+    let hooks = ensure_hooks_object(
+        &mut desired,
+        settings_path,
+        "claude settings",
+        "claude settings hooks",
+    )?;
+    let canonical = canonical_action_value(hook_path, action);
+    let commands = removed_actions
+        .iter()
+        .flat_map(|action| hook_command_variants(hook_path, Some(action)))
+        .collect::<Vec<_>>();
+    remove_value_event_commands(hooks, event, &commands, Some(&canonical))?;
+    ensure_command_hook(hooks, event, hook_command(hook_path, Some(action)), 1, None)?;
+    if parse_value(content, settings_path)? == desired {
+        return Ok(content.to_string());
+    }
+    rewrite_extra_hook(
+        content,
+        settings_path,
+        hook_path,
+        event,
+        action,
+        removed_actions,
         &desired,
     )
 }
@@ -245,7 +305,7 @@ fn rewrite(
             &hooks,
             policy.event,
             &commands,
-            kind == EditKind::Install,
+            kind == EditKind::Install && policy.event == "SessionStart",
             &canonical,
         )?;
     }
@@ -281,6 +341,86 @@ fn rewrite(
     verify_updated(root.to_string(), settings_path, desired)
 }
 
+fn rewrite_extra_hook(
+    content: &str,
+    settings_path: &Path,
+    hook_path: &Path,
+    event: &str,
+    action: &str,
+    removed_actions: &[&str],
+    desired: &Value,
+) -> io::Result<String> {
+    let root = CstRootNode::parse(content, &strict_parse_options()).map_err(|err| {
+        io::Error::other(format!(
+            "failed to parse {}: {err}",
+            settings_path.display()
+        ))
+    })?;
+    let root_object = root
+        .value()
+        .and_then(|value| value.as_object())
+        .ok_or_else(|| io::Error::other("claude settings must be a JSON object"))?;
+    let hooks = root_object
+        .get("hooks")
+        .and_then(|property| property.object_value())
+        .ok_or_else(|| io::Error::other("claude settings hooks must be a JSON object"))?;
+    let canonical = canonical_action_value(hook_path, action);
+    let commands = removed_actions
+        .iter()
+        .flat_map(|action| hook_command_variants(hook_path, Some(action)))
+        .collect::<Vec<_>>();
+    let preserved = remove_event_commands(&hooks, event, &commands, true, &canonical)?;
+    if !preserved {
+        match hooks.get(event) {
+            Some(property) => {
+                let entries = property.array_value().ok_or_else(|| {
+                    io::Error::other(format!("hook entries for {event} must be an array"))
+                })?;
+                if direct_children_are_compact(&entries.children()) {
+                    let updated = root.to_string();
+                    let parsed = parse_ast_root_object(&updated, settings_path)?;
+                    let ast_entries = parsed
+                        .get_object("hooks")
+                        .and_then(|hooks| hooks.get_array(event))
+                        .ok_or_else(|| {
+                            io::Error::other(format!("hook entries for {event} must be an array"))
+                        })?;
+                    let updated = append_array_element(
+                        &updated,
+                        ast_entries,
+                        &canonical_action_json(hook_path, action)?,
+                    );
+                    return verify_updated(updated, settings_path, desired);
+                }
+                entries.append(canonical_action_input(hook_path, action));
+            }
+            None if direct_children_are_compact(&hooks.children()) => {
+                let updated = root.to_string();
+                let parsed = parse_ast_root_object(&updated, settings_path)?;
+                let ast_hooks = parsed.get_object("hooks").ok_or_else(|| {
+                    io::Error::other("claude settings hooks must be a JSON object")
+                })?;
+                let value = format!("[{}]", canonical_action_json(hook_path, action)?);
+                return verify_updated(
+                    append_object_property(&updated, ast_hooks, event, &value),
+                    settings_path,
+                    desired,
+                );
+            }
+            None => {
+                hooks
+                    .append(event, CstInputValue::Array(Vec::new()))
+                    .array_value()
+                    .ok_or_else(|| {
+                        io::Error::other(format!("failed to create {event} hook array"))
+                    })?
+                    .append(canonical_action_input(hook_path, action));
+            }
+        }
+    }
+    verify_updated(root.to_string(), settings_path, desired)
+}
+
 fn remove_event_commands(
     hooks: &CstObject,
     event: &str,
@@ -297,10 +437,7 @@ fn remove_event_commands(
     let mut canonical_preserved = false;
 
     for entry in entries.elements() {
-        if installing
-            && event == "SessionStart"
-            && !canonical_preserved
-            && entry.to_serde_value().as_ref() == Some(canonical)
+        if installing && !canonical_preserved && entry.to_serde_value().as_ref() == Some(canonical)
         {
             canonical_preserved = true;
             continue;
@@ -332,7 +469,7 @@ fn remove_event_commands(
         }
     }
 
-    if entries.elements().is_empty() && !(installing && event == "SessionStart") {
+    if entries.elements().is_empty() && !installing {
         event_property.remove();
     }
 
@@ -368,6 +505,41 @@ fn canonical_hook_input(hook_path: &Path) -> CstInputValue {
             timeout: 10u64,
         }],
     })
+}
+
+fn canonical_action_value(hook_path: &Path, action: &str) -> Value {
+    serde_json_value!({
+        "hooks": [{
+            "type": "command",
+            "command": hook_command(hook_path, Some(action)),
+            "timeout": 1,
+        }],
+    })
+}
+
+#[cfg(test)]
+fn canonical_end_value(hook_path: &Path) -> Value {
+    canonical_action_value(hook_path, "end")
+}
+
+fn canonical_action_input(hook_path: &Path, action: &str) -> CstInputValue {
+    let command = hook_command(hook_path, Some(action));
+    json!({
+        hooks: [{
+            "type": "command",
+            command: command,
+            timeout: 1u64,
+        }],
+    })
+}
+
+fn canonical_action_json(hook_path: &Path, action: &str) -> io::Result<String> {
+    serde_json::to_string(&canonical_action_value(hook_path, action)).map_err(io::Error::other)
+}
+
+#[cfg(test)]
+fn canonical_end_json(hook_path: &Path) -> io::Result<String> {
+    canonical_action_json(hook_path, "end")
 }
 
 fn append_hooks_property_compact(
@@ -593,7 +765,7 @@ mod tests {
     fn paths() -> (&'static Path, &'static Path) {
         (
             Path::new("/home/test/.claude/settings.json"),
-            Path::new("/home/test/.claude/hooks/herdr-agent-state.sh"),
+            Path::new("/home/test/.claude/hooks/mercury-agent-state.sh"),
         )
     }
 
@@ -635,41 +807,43 @@ mod tests {
     fn install_keeps_compact_containers_compact() {
         let (settings_path, hook_path) = paths();
         let canonical = canonical_hook_json(hook_path).unwrap();
+        let end = canonical_end_json(hook_path).unwrap();
+        let turn = canonical_action_json(hook_path, "turn").unwrap();
         let cases = [
             (
                 "{\"zeta\":{\"escaped\":\"\\u0061\",\"n\":1e+02},\"alpha\":1}\r\n",
                 format!(
-                    "{{\"zeta\":{{\"escaped\":\"\\u0061\",\"n\":1e+02}},\"alpha\":1,\"hooks\":{{\"SessionStart\":[{canonical}]}}}}\r\n"
+                    "{{\"zeta\":{{\"escaped\":\"\\u0061\",\"n\":1e+02}},\"alpha\":1,\"hooks\":{{\"SessionStart\":[{canonical}],\"SessionEnd\":[{end}],\"Stop\":[{turn}]}}}}\r\n"
                 ),
             ),
             (
                 "{\"hooks\":{\"Notification\":[{\"matcher\":\"keep\",\"hooks\":[]}]}, \"alpha\":1}",
                 format!(
-                    "{{\"hooks\":{{\"Notification\":[{{\"matcher\":\"keep\",\"hooks\":[]}}],\"SessionStart\":[{canonical}]}}, \"alpha\":1}}"
+                    "{{\"hooks\":{{\"Notification\":[{{\"matcher\":\"keep\",\"hooks\":[]}}],\"SessionStart\":[{canonical}],\"SessionEnd\":[{end}],\"Stop\":[{turn}]}}, \"alpha\":1}}"
                 ),
             ),
             (
                 "{\"hooks\":{\"SessionStart\":[{\"matcher\":\"keep\",\"hooks\":[{\"type\":\"command\",\"command\":\"echo keep\"}]}]}}",
                 format!(
-                    "{{\"hooks\":{{\"SessionStart\":[{{\"matcher\":\"keep\",\"hooks\":[{{\"type\":\"command\",\"command\":\"echo keep\"}}]}},{canonical}]}}}}"
+                    "{{\"hooks\":{{\"SessionStart\":[{{\"matcher\":\"keep\",\"hooks\":[{{\"type\":\"command\",\"command\":\"echo keep\"}}]}},{canonical}],\"SessionEnd\":[{end}],\"Stop\":[{turn}]}}}}"
                 ),
             ),
             (
                 "{\"zeta\":{\n  \"x\":1\n},\"alpha\":1}",
                 format!(
-                    "{{\"zeta\":{{\n  \"x\":1\n}},\"alpha\":1,\"hooks\":{{\"SessionStart\":[{canonical}]}}}}"
+                    "{{\"zeta\":{{\n  \"x\":1\n}},\"alpha\":1,\"hooks\":{{\"SessionStart\":[{canonical}],\"SessionEnd\":[{end}],\"Stop\":[{turn}]}}}}"
                 ),
             ),
             (
                 "{\"hooks\":{\"Notification\":[\n  {\"matcher\":\"keep\",\"hooks\":[]}\n]},\"alpha\":1}",
                 format!(
-                    "{{\"hooks\":{{\"Notification\":[\n  {{\"matcher\":\"keep\",\"hooks\":[]}}\n],\"SessionStart\":[{canonical}]}},\"alpha\":1}}"
+                    "{{\"hooks\":{{\"Notification\":[\n  {{\"matcher\":\"keep\",\"hooks\":[]}}\n],\"SessionStart\":[{canonical}],\"SessionEnd\":[{end}],\"Stop\":[{turn}]}},\"alpha\":1}}"
                 ),
             ),
             (
                 "{\"hooks\":{\"SessionStart\":[{\n  \"matcher\":\"keep\",\n  \"hooks\":[{\"type\":\"command\",\"command\":\"echo keep\"}]\n}]}}",
                 format!(
-                    "{{\"hooks\":{{\"SessionStart\":[{{\n  \"matcher\":\"keep\",\n  \"hooks\":[{{\"type\":\"command\",\"command\":\"echo keep\"}}]\n}},{canonical}]}}}}"
+                    "{{\"hooks\":{{\"SessionStart\":[{{\n  \"matcher\":\"keep\",\n  \"hooks\":[{{\"type\":\"command\",\"command\":\"echo keep\"}}]\n}},{canonical}],\"SessionEnd\":[{end}],\"Stop\":[{turn}]}}}}"
                 ),
             ),
         ];
@@ -698,11 +872,41 @@ mod tests {
     }
 
     #[test]
+    fn session_end_migration_preserves_foreign_hook_and_is_idempotent() {
+        let (settings_path, hook_path) = paths();
+        let release = serde_json::to_string(&hook_command(hook_path, Some("release"))).unwrap();
+        let input = format!(
+            "{{\"hooks\":{{\"SessionEnd\":[{{\"hooks\":[{{\"type\":\"command\",\"command\":{release}}},{{\"type\":\"command\",\"command\":\"echo keep\"}}]}}]}}}}"
+        );
+
+        let installed = install(&input, settings_path, hook_path).unwrap();
+        let settings: Value = serde_json::from_str(&installed).unwrap();
+        let end = settings["hooks"]["SessionEnd"].as_array().unwrap();
+        assert_eq!(end.len(), 2);
+        assert_eq!(end[0]["hooks"][0]["command"], "echo keep");
+        assert_eq!(end[1], canonical_end_value(hook_path));
+        assert_eq!(
+            install(&installed, settings_path, hook_path).unwrap(),
+            installed
+        );
+
+        let uninstalled = uninstall(&installed, settings_path, hook_path).unwrap();
+        let settings: Value = serde_json::from_str(&uninstalled).unwrap();
+        assert_eq!(
+            settings["hooks"]["SessionEnd"][0]["hooks"][0]["command"],
+            "echo keep"
+        );
+        assert_eq!(settings["hooks"]["SessionEnd"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
     fn install_is_a_byte_exact_noop_for_a_canonical_hook() {
         let (settings_path, hook_path) = paths();
         let command = serde_json::to_string(&hook_command(hook_path, Some("session"))).unwrap();
+        let end = canonical_end_json(hook_path).unwrap();
+        let turn = canonical_action_json(hook_path, "turn").unwrap();
         let input = format!(
-            "{{\"hooks\":{{\"SessionStart\":[{{\"hooks\":[{{\"timeout\":10,\"command\":{command},\"type\":\"command\"}}],\"matcher\":\"{SESSION_START_MATCHER}\"}}]}},\"escaped\":\"\\u0061\"}}  \r\n\r\n"
+            "{{\"hooks\":{{\"SessionStart\":[{{\"hooks\":[{{\"timeout\":10,\"command\":{command},\"type\":\"command\"}}],\"matcher\":\"{SESSION_START_MATCHER}\"}}],\"SessionEnd\":[{end}],\"Stop\":[{turn}]}},\"escaped\":\"\\u0061\"}}  \r\n\r\n"
         );
 
         let updated = install(&input, settings_path, hook_path).unwrap();
@@ -758,7 +962,18 @@ mod tests {
         ]
         .concat();
         let input = ["{\"hooks\":{", &session_start, ",", &old_event, "}}"].concat();
-        let expected = ["{\"hooks\":{", &session_start, "}}"].concat();
+        let end = canonical_end_json(hook_path).unwrap();
+        let turn = canonical_action_json(hook_path, "turn").unwrap();
+        let expected = [
+            "{\"hooks\":{",
+            &session_start,
+            ",\"SessionEnd\":[",
+            &end,
+            "],\"Stop\":[",
+            &turn,
+            "]}}",
+        ]
+        .concat();
 
         let updated = install(&input, settings_path, hook_path).unwrap();
 

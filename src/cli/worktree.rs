@@ -61,7 +61,9 @@ fn worktree_list(args: &[String]) -> std::io::Result<i32> {
         }
     }
     if workspace_id.is_some() && cwd.is_some() {
-        eprintln!("usage: herdr worktree list [--workspace ID | --cwd PATH] [--trust-repository]");
+        eprintln!(
+            "usage: mercury worktree list [--workspace ID | --cwd PATH] [--trust-repository]"
+        );
         return Ok(2);
     }
 
@@ -154,7 +156,7 @@ fn worktree_create(args: &[String]) -> std::io::Result<i32> {
     }
     if workspace_id.is_some() && cwd.is_some() {
         eprintln!(
-            "usage: herdr worktree create [--workspace ID | --cwd PATH] [--branch NAME] [--base REF] [--path PATH] [--label TEXT] [--focus] [--no-focus] [--trust-repository]"
+            "usage: mercury worktree create [--workspace ID | --cwd PATH] [--branch NAME] [--base REF] [--path PATH] [--label TEXT] [--focus] [--no-focus] [--trust-repository]"
         );
         return Ok(2);
     }
@@ -244,13 +246,13 @@ fn worktree_open(args: &[String]) -> std::io::Result<i32> {
     }
     if workspace_id.is_some() && cwd.is_some() {
         eprintln!(
-            "usage: herdr worktree open [--workspace ID | --cwd PATH] (--path PATH | --branch NAME) [--label TEXT] [--focus] [--no-focus] [--trust-repository]"
+            "usage: mercury worktree open [--workspace ID | --cwd PATH] (--path PATH | --branch NAME) [--label TEXT] [--focus] [--no-focus] [--trust-repository]"
         );
         return Ok(2);
     }
     if path.is_some() == branch.is_some() {
         eprintln!(
-            "usage: herdr worktree open [--workspace ID | --cwd PATH] (--path PATH | --branch NAME) [--label TEXT] [--focus] [--no-focus] [--trust-repository]"
+            "usage: mercury worktree open [--workspace ID | --cwd PATH] (--path PATH | --branch NAME) [--label TEXT] [--focus] [--no-focus] [--trust-repository]"
         );
         return Ok(2);
     }
@@ -299,7 +301,7 @@ fn worktree_remove(args: &[String]) -> std::io::Result<i32> {
     }
 
     let Some(workspace_id) = workspace_id else {
-        eprintln!("usage: herdr worktree remove --workspace ID [--force] [--trust-repository]");
+        eprintln!("usage: mercury worktree remove --workspace ID [--force] [--trust-repository]");
         return Ok(2);
     };
 
@@ -311,15 +313,15 @@ fn worktree_remove(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn print_worktree_help() {
-    eprintln!("herdr worktree commands:");
-    eprintln!("  herdr worktree list [--workspace ID | --cwd PATH] [--trust-repository]");
+    eprintln!("mercury worktree commands:");
+    eprintln!("  mercury worktree list [--workspace ID | --cwd PATH] [--trust-repository]");
     eprintln!(
-        "  herdr worktree create [--workspace ID | --cwd PATH] [--branch NAME] [--base REF] [--path PATH] [--label TEXT] [--focus] [--no-focus] [--trust-repository]"
+        "  mercury worktree create [--workspace ID | --cwd PATH] [--branch NAME] [--base REF] [--path PATH] [--label TEXT] [--focus] [--no-focus] [--trust-repository]"
     );
     eprintln!(
-        "  herdr worktree open [--workspace ID | --cwd PATH] (--path PATH | --branch NAME) [--label TEXT] [--focus] [--no-focus] [--trust-repository]"
+        "  mercury worktree open [--workspace ID | --cwd PATH] (--path PATH | --branch NAME) [--label TEXT] [--focus] [--no-focus] [--trust-repository]"
     );
-    eprintln!("  herdr worktree remove --workspace ID [--force] [--trust-repository]");
+    eprintln!("  mercury worktree remove --workspace ID [--force] [--trust-repository]");
 }
 
 fn normalize_path_arg(value: &str) -> std::io::Result<String> {
@@ -348,8 +350,8 @@ mod machine_tests {
     fn remote_worktree_paths_are_not_expanded_on_the_caller_machine() {
         crate::cli::target::with_test_client(crate::api::client::ApiClient::local(), || {
             for path in [
-                "~/Projects/herdr",
-                "/Users/can/Projects/herdr",
+                "~/Projects/mercury",
+                "/Users/can/Projects/mercury",
                 r"C:\work\repo",
                 "C:/work/repo",
                 r"\\host\share\repo",

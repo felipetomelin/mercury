@@ -59,12 +59,12 @@ pub(crate) fn uninstall_experimental_letta() -> io::Result<Vec<String>> {
         }
         if result.updated_settings {
             messages.push(format!(
-                "removed herdr letta hook entry from {}",
+                "removed mercury letta hook entry from {}",
                 result.settings_path.display()
             ));
         } else {
             messages.push(format!(
-                "no herdr letta hook entry found in {}",
+                "no mercury letta hook entry found in {}",
                 result.settings_path.display()
             ));
         }
@@ -113,7 +113,7 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
         }
         crate::api::schema::IntegrationTarget::Claude => {
             let installed = install_claude()?;
-            vec![
+            let mut messages = vec![
                 format!(
                     "installed claude integration hook to {}",
                     installed.hook_path.display()
@@ -122,7 +122,14 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
                     "ensured claude settings at {}",
                     installed.settings_path.display()
                 ),
-            ]
+            ];
+            if installed.statusline_installed {
+                messages.push(format!(
+                    "installed Claude statusline bridge in {}",
+                    installed.settings_path.display()
+                ));
+            }
+            messages
         }
         crate::api::schema::IntegrationTarget::Codex => {
             let installed = install_codex()?;
@@ -189,7 +196,7 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
             ];
             if installed.updated_legacy_hooks {
                 messages.push(format!(
-                    "removed legacy herdr droid hook entries from {}",
+                    "removed legacy mercury droid hook entries from {}",
                     installed.hooks_path.display()
                 ));
             }
@@ -371,12 +378,18 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr claude hook entries from {}",
+                    "removed mercury claude hook entries from {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr claude hook entries found in {}",
+                    "no mercury claude hook entries found in {}",
+                    result.settings_path.display()
+                ));
+            }
+            if result.statusline_removed {
+                messages.push(format!(
+                    "restored previous Claude statusline in {}",
                     result.settings_path.display()
                 ));
             }
@@ -398,12 +411,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_hooks {
                 messages.push(format!(
-                    "removed herdr codex hook entries from {}",
+                    "removed mercury codex hook entries from {}",
                     result.hooks_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr codex hook entries found in {}",
+                    "no mercury codex hook entries found in {}",
                     result.hooks_path.display()
                 ));
             }
@@ -429,12 +442,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr copilot hook entries from {}",
+                    "removed mercury copilot hook entries from {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr copilot hook entries found in {}",
+                    "no mercury copilot hook entries found in {}",
                     result.settings_path.display()
                 ));
             }
@@ -456,12 +469,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr devin hook entries from {}",
+                    "removed mercury devin hook entries from {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr devin hook entries found in {}",
+                    "no mercury devin hook entries found in {}",
                     result.settings_path.display()
                 ));
             }
@@ -483,12 +496,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_config {
                 messages.push(format!(
-                    "removed herdr kimi hook entries from {}",
+                    "removed mercury kimi hook entries from {}",
                     result.config_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr kimi hook entries found in {}",
+                    "no mercury kimi hook entries found in {}",
                     result.config_path.display()
                 ));
             }
@@ -510,23 +523,23 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_hooks {
                 messages.push(format!(
-                    "removed legacy herdr droid hook entries from {}",
+                    "removed legacy mercury droid hook entries from {}",
                     result.hooks_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no legacy herdr droid hook entries found in {}",
+                    "no legacy mercury droid hook entries found in {}",
                     result.hooks_path.display()
                 ));
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr droid hook entries from {}",
+                    "removed mercury droid hook entries from {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr droid hook entries found in {}",
+                    "no mercury droid hook entries found in {}",
                     result.settings_path.display()
                 ));
             }
@@ -558,7 +571,7 @@ pub(crate) fn uninstall_target(
             });
             for path in result.updated_tui_configs {
                 messages.push(format!(
-                    "removed herdr opencode plugin entry from {}",
+                    "removed mercury opencode plugin entry from {}",
                     path.display()
                 ));
             }
@@ -621,12 +634,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr qodercli hook entries from {}",
+                    "removed mercury qodercli hook entries from {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr qodercli hook entries found in {}",
+                    "no mercury qodercli hook entries found in {}",
                     result.settings_path.display()
                 ));
             }
@@ -648,12 +661,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr qwen hook entries from {}",
+                    "removed mercury qwen hook entries from {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr qwen hook entries found in {}",
+                    "no mercury qwen hook entries found in {}",
                     result.settings_path.display()
                 ));
             }
@@ -675,12 +688,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_hooks {
                 messages.push(format!(
-                    "removed herdr cursor hook entries from {}",
+                    "removed mercury cursor hook entries from {}",
                     result.hooks_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr cursor hook entries found in {}",
+                    "no mercury cursor hook entries found in {}",
                     result.hooks_path.display()
                 ));
             }
@@ -702,12 +715,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_hooks {
                 messages.push(format!(
-                    "removed herdr mastracode hook entries from {}",
+                    "removed mercury mastracode hook entries from {}",
                     result.hooks_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr mastracode hook entries found in {}",
+                    "no mercury mastracode hook entries found in {}",
                     result.hooks_path.display()
                 ));
             }
@@ -729,12 +742,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_hooks {
                 messages.push(format!(
-                    "removed herdr antigravity-cli hook entries from {}",
+                    "removed mercury antigravity-cli hook entries from {}",
                     result.hooks_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr antigravity-cli hook entries found in {}",
+                    "no mercury antigravity-cli hook entries found in {}",
                     result.hooks_path.display()
                 ));
             }

@@ -1089,10 +1089,10 @@ mod tests {
     #[test]
     fn restored_worktree_space_membership_drops_missing_checkout() {
         let missing =
-            std::env::temp_dir().join(format!("herdr-missing-worktree-{}", std::process::id()));
+            std::env::temp_dir().join(format!("mercury-missing-worktree-{}", std::process::id()));
         let membership = crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),
-            label: "herdr".into(),
+            label: "mercury".into(),
             repo_root: missing.join("repo"),
             checkout_path: missing.join("checkout"),
             is_linked_worktree: true,
@@ -1105,7 +1105,7 @@ mod tests {
     fn restore_plan_respects_opt_in_and_allowlist() {
         let pi_session_path = test_session_path("pi-session.jsonl");
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
-            source: "herdr:pi".into(),
+            source: "mercury:pi".into(),
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: pi_session_path.clone(),
@@ -1118,7 +1118,7 @@ mod tests {
         );
 
         let unsupported_path = super::super::snapshot::PaneAgentSessionSnapshot {
-            source: "herdr:claude".into(),
+            source: "mercury:claude".into(),
             agent: "claude".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("claude-session"),
@@ -1130,7 +1130,7 @@ mod tests {
     fn restore_plan_selection_suppresses_duplicates() {
         let pi_session_path = test_session_path("pi-session.jsonl");
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
-            source: "herdr:pi".into(),
+            source: "mercury:pi".into(),
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: pi_session_path.clone(),
@@ -1152,7 +1152,7 @@ mod tests {
     #[test]
     fn pane_restore_startup_suppresses_history_for_native_agent_resume() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
-            source: "herdr:pi".into(),
+            source: "mercury:pi".into(),
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("pi-session.jsonl"),
@@ -1183,7 +1183,7 @@ mod tests {
     #[test]
     fn pane_restore_startup_suppresses_history_for_duplicate_native_agent_session() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
-            source: "herdr:pi".into(),
+            source: "mercury:pi".into(),
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("pi-session.jsonl"),
@@ -1223,13 +1223,13 @@ mod tests {
     #[test]
     fn pane_restore_startup_prefers_reported_resume_argv() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
-            source: "herdr:pi".into(),
+            source: "mercury:pi".into(),
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("pi-session.jsonl"),
         };
         let resume = super::super::snapshot::PaneAgentResumeSnapshot {
-            source: "herdr:pi".into(),
+            source: "mercury:pi".into(),
             agent: "pi".into(),
             argv: vec![
                 "pi".into(),
@@ -1296,7 +1296,7 @@ mod tests {
     #[test]
     fn pane_restore_startup_keeps_history_without_native_agent_resume() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
-            source: "herdr:pi".into(),
+            source: "mercury:pi".into(),
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("pi-session.jsonl"),
@@ -1328,7 +1328,7 @@ mod tests {
     #[test]
     fn restore_rehydrates_agent_session_metadata() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
-            source: "herdr:hermes".into(),
+            source: "mercury:hermes".into(),
             agent: "hermes".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Id,
             value: "hermes-session".into(),
@@ -1336,7 +1336,7 @@ mod tests {
 
         let preserved = restored_terminal_agent_session(Some(&session), false)
             .expect("restore should preserve metadata");
-        assert_eq!(preserved.source, "herdr:hermes");
+        assert_eq!(preserved.source, "mercury:hermes");
         assert_eq!(preserved.agent, "hermes");
         assert_eq!(preserved.session_ref.value, "hermes-session");
     }
@@ -1344,7 +1344,7 @@ mod tests {
     #[test]
     fn restore_does_not_rehydrate_duplicate_agent_session_metadata() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
-            source: "herdr:pi".into(),
+            source: "mercury:pi".into(),
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("pi-session.jsonl"),
@@ -1360,11 +1360,11 @@ mod tests {
     async fn failed_cold_restore_preserves_panes_and_saved_directories() {
         for missing_shell in [false, true] {
             let mut snapshot: SessionSnapshot = serde_json::from_str(include_str!(
-                "../../tests/fixtures/session/current-herdr-session.json"
+                "../../tests/fixtures/session/current-mercury-session.json"
             ))
             .unwrap();
             let cwd = std::env::current_dir().unwrap();
-            let missing = cwd.join("__herdr_missing_restore_directory__");
+            let missing = cwd.join("__mercury_missing_restore_directory__");
             assert!(!missing.exists());
             for workspace in &mut snapshot.workspaces {
                 workspace.identity_cwd = cwd.clone();
@@ -1378,7 +1378,7 @@ mod tests {
             failed.cwd = missing.clone();
             failed.label = Some("keep my pane".into());
             failed.agent_session = Some(super::super::snapshot::PaneAgentSessionSnapshot {
-                source: "herdr:opencode".into(),
+                source: "mercury:opencode".into(),
                 agent: "opencode".into(),
                 kind: crate::agent_resume::AgentSessionRefKind::Id,
                 value: "keep-my-session".into(),
@@ -1391,7 +1391,7 @@ mod tests {
                 80,
                 0,
                 if missing_shell {
-                    "__herdr_missing_restore_shell__"
+                    "__mercury_missing_restore_shell__"
                 } else {
                     test_restore_shell()
                 },
@@ -1467,7 +1467,7 @@ mod tests {
                             agent_name: Some("reviewer".into()),
                             managed_agent_kind: Some("opencode".into()),
                             agent_session: Some(super::super::snapshot::PaneAgentSessionSnapshot {
-                                source: "herdr:opencode".into(),
+                                source: "mercury:opencode".into(),
                                 agent: "opencode".into(),
                                 kind: crate::agent_resume::AgentSessionRefKind::Id,
                                 value: "opencode-session".into(),
@@ -1518,7 +1518,7 @@ mod tests {
             .persisted_agent_session
             .as_ref()
             .expect("persisted agent session should survive restore");
-        assert_eq!(session.source, "herdr:opencode");
+        assert_eq!(session.source, "mercury:opencode");
         assert_eq!(session.agent, "opencode");
         assert_eq!(session.session_ref.value, "opencode-session");
     }
@@ -1631,7 +1631,7 @@ mod tests {
             agent_name: Some("planner".into()),
             managed_agent_kind: None,
             agent_session: Some(super::super::snapshot::PaneAgentSessionSnapshot {
-                source: "herdr:codex".into(),
+                source: "mercury:codex".into(),
                 agent: "codex".into(),
                 kind: crate::agent_resume::AgentSessionRefKind::Id,
                 value: "codex-session".into(),
@@ -1783,7 +1783,7 @@ mod tests {
                             agent_name: None,
                             managed_agent_kind: None,
                             agent_session: Some(super::super::snapshot::PaneAgentSessionSnapshot {
-                                source: "herdr:codex".into(),
+                                source: "mercury:codex".into(),
                                 agent: "codex".into(),
                                 kind: crate::agent_resume::AgentSessionRefKind::Id,
                                 value: "codex-session".into(),
@@ -1885,7 +1885,7 @@ mod tests {
             terminal
                 .set_detected_agent_process_at(crate::detect::Agent::Pi, std::time::Instant::now());
             terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
-                source: "herdr:pi".into(),
+                source: "mercury:pi".into(),
                 agent: "pi".into(),
                 session_ref: crate::agent_resume::AgentSessionRef::path(
                     "/var/tmp/handoff-test.jsonl",
@@ -1893,7 +1893,7 @@ mod tests {
                 .unwrap(),
             });
             terminal.set_hook_authority_with_session_ref(
-                "herdr:pi".into(),
+                "mercury:pi".into(),
                 "pi".into(),
                 state_before_handoff,
                 None,
@@ -1942,7 +1942,7 @@ mod tests {
                 "screen fallback must not erase the transferred hook status"
             );
             terminal.set_hook_authority_with_session_ref(
-                "herdr:pi".into(),
+                "mercury:pi".into(),
                 "pi".into(),
                 AgentState::Idle,
                 None,

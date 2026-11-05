@@ -6,14 +6,14 @@ mod completion;
 mod machine;
 
 pub(super) fn command() -> Command {
-    let command = Command::new("herdr")
+    let command = Command::new("mercury")
         .about("terminal workspace manager for AI coding agents")
         .disable_help_flag(true)
         .disable_version_flag(true)
         .arg(help_flag())
         .arg(option("session", "NAME").help("Use or create a named persistent session"))
         .arg(option("machine", "LABEL-OR-ID").help("Run an API command on a saved SSH machine"))
-        .arg(option("remote", "TARGET").help("Attach through SSH to a remote Herdr server"))
+        .arg(option("remote", "TARGET").help("Attach through SSH to a remote Mercury server"))
         .arg(
             option("remote-keybindings", "MODE")
                 .value_parser(["local", "server"])
@@ -32,7 +32,22 @@ pub(super) fn command() -> Command {
         .subcommand(completion::command())
         .subcommand(update_command())
         .subcommand(status_command())
+        .subcommand(
+            Command::new("statusline")
+                .about("Claude Code usage statusline bridge")
+                .arg(option("chain-file", "PATH").value_hint(ValueHint::FilePath)),
+        )
         .subcommand(config_command())
+        .subcommand(cron_command())
+        .subcommand(route_command())
+        .subcommand(history_command())
+        .subcommand(knowledge_command())
+        .subcommand(
+            Command::new("context")
+                .about("Build project context without submitting a task")
+                .subcommand(knowledge_options(Command::new("build"))),
+        )
+        .subcommand(learn_command())
         .subcommand(channel_command())
         .subcommand(machine::command())
         .subcommand(server_command())
@@ -92,7 +107,7 @@ fn write_requested_help(
     let mut root = command();
     root.build();
     let mut selected = &mut root;
-    let mut path = vec!["herdr".to_string()];
+    let mut path = vec!["mercury".to_string()];
     for segment in &args[1..help_index] {
         if selected.find_subcommand(segment).is_none() {
             break;
@@ -298,7 +313,7 @@ fn tab_command() -> Command {
 
 fn notification_command() -> Command {
     Command::new("notification")
-        .about("Show Herdr notifications")
+        .about("Show Mercury notifications")
         .subcommand(
             Command::new("show")
                 .about("Show a notification")
@@ -322,7 +337,7 @@ fn agent_command() -> Command {
         .subcommand(
             Command::new("read")
                 .about("Read agent terminal output")
-                .override_usage("herdr agent read <TARGET> [OPTIONS]")
+                .override_usage("mercury agent read <TARGET> [OPTIONS]")
                 .arg(required("target", "TARGET"))
                 .arg(read_source_option(true))
                 .arg(option("lines", "N"))
@@ -339,7 +354,7 @@ fn agent_command() -> Command {
         .subcommand(
             Command::new("prompt")
                 .about("Submit a prompt to an agent")
-                .override_usage("herdr agent prompt <TARGET> <TEXT> [OPTIONS]")
+                .override_usage("mercury agent prompt <TARGET> <TEXT> [OPTIONS]")
                 .arg(required("target", "TARGET"))
                 .arg(required("text", "TEXT"))
                 .arg(
@@ -365,7 +380,7 @@ fn agent_command() -> Command {
         .subcommand(
             Command::new("rename")
                 .about("Rename an agent")
-                .override_usage("herdr agent rename <TARGET> <NAME>|--clear")
+                .override_usage("mercury agent rename <TARGET> <NAME>|--clear")
                 .arg(required("target", "TARGET"))
                 .arg(Arg::new("name").value_name("NAME"))
                 .arg(flag("clear"))
@@ -379,7 +394,7 @@ fn agent_command() -> Command {
         .subcommand(
             Command::new("wait")
                 .about("Wait until an agent reaches one of the requested states")
-                .override_usage("herdr agent wait <TARGET> [OPTIONS]")
+                .override_usage("mercury agent wait <TARGET> [OPTIONS]")
                 .arg(required("target", "TARGET"))
                 .arg(
                     option("until", "STATUS")
@@ -395,7 +410,7 @@ fn agent_command() -> Command {
         .subcommand(
             Command::new("attach")
                 .about("Attach directly to an agent terminal")
-                .override_usage("herdr agent attach <TARGET> [OPTIONS]")
+                .override_usage("mercury agent attach <TARGET> [OPTIONS]")
                 .arg(required("target", "TARGET"))
                 .arg(flag("takeover")),
         )
@@ -403,7 +418,7 @@ fn agent_command() -> Command {
             Command::new("start")
                 .about("Start a supported interactive agent in an existing pane")
                 .override_usage(
-                    "herdr agent start <NAME> --kind <KIND> --pane <ID> [OPTIONS] [-- [AGENT_ARG]...]",
+                    "mercury agent start <NAME> --kind <KIND> --pane <ID> [OPTIONS] [-- [AGENT_ARG]...]",
                 )
                 .arg(required("name", "NAME"))
                 .arg(
@@ -428,7 +443,7 @@ fn agent_command() -> Command {
                         .last(true),
                 )
                 .after_help(
-                    "The pane must be at its interactive shell prompt. Success means the expected agent was detected in the same terminal and is ready for input.\n\nnext: herdr agent prompt <TARGET> <TEXT> --wait",
+                    "The pane must be at its interactive shell prompt. Success means the expected agent was detected in the same terminal and is ready for input.\n\nnext: mercury agent prompt <TARGET> <TEXT> --wait",
                 ),
         )
         .subcommand(
@@ -536,7 +551,7 @@ fn pane_command() -> Command {
                 .args(current_pane_args())
                 .arg(
                     option("right-click", "TARGET")
-                        .value_parser(["herdr", "pane"])
+                        .value_parser(["mercury", "pane"])
                         .required(true),
                 ),
         )
@@ -549,7 +564,7 @@ fn pane_command() -> Command {
                 .arg(option("ratio", "FLOAT"))
                 .arg(path_option("cwd", "PATH"))
                 .arg(env_option())
-                .arg(option("right-click", "TARGET").value_parser(["herdr", "pane"]))
+                .arg(option("right-click", "TARGET").value_parser(["mercury", "pane"]))
                 .arg(flag("focus"))
                 .arg(flag("no-focus")),
         )
@@ -584,7 +599,7 @@ fn pane_command() -> Command {
                 .arg(required("pane_id", "PANE_ID"))
                 .arg(required("text", "TEXT"))
                 .after_help(
-                    "next: herdr pane run <PANE_ID> <COMMAND> sends text and Enter in one call",
+                    "next: mercury pane run <PANE_ID> <COMMAND> sends text and Enter in one call",
                 ),
         )
         .subcommand(
@@ -667,7 +682,7 @@ fn resume_argv_arg() -> Arg {
         .value_name("RESUME_ARG")
         .num_args(0..)
         .last(true)
-        .help("Command that resumes this session after a Herdr restart; starts with a plain command name")
+        .help("Command that resumes this session after a Mercury restart; starts with a plain command name")
 }
 
 fn release_agent_command() -> Command {
@@ -757,6 +772,185 @@ fn session_command() -> Command {
             Command::new("delete")
                 .about("Delete a stopped session")
                 .arg(required("name", "NAME"))
+                .arg(json_flag()),
+        )
+}
+
+fn cron_command() -> Command {
+    Command::new("cron")
+        .about("Manage persistent scheduled jobs")
+        .subcommand(
+            Command::new("add")
+                .about("Add a job from TOML or simple flags")
+                .arg(option("file", "PATH").value_hint(ValueHint::FilePath))
+                .arg(option("name", "NAME"))
+                .arg(option("schedule", "EXPR"))
+                .arg(option("script", "PROGRAM"))
+                .arg(option("provider", "claude|codex"))
+                .arg(option("pane", "PANE"))
+                .arg(option("prompt-file", "PATH").value_hint(ValueHint::FilePath))
+                .arg(
+                    Arg::new("arg")
+                        .long("arg")
+                        .value_name("ARG")
+                        .action(ArgAction::Append),
+                )
+                .arg(option("workdir", "PATH").value_hint(ValueHint::DirPath))
+                .arg(option("timeout", "SECONDS"))
+                .arg(option("utc-offset", "OFFSET"))
+                .arg(option("repeat", "COUNT")),
+        )
+        .subcommand(Command::new("list").about("List jobs"))
+        .subcommand(
+            Command::new("edit")
+                .about("Replace a job definition")
+                .arg(required("job_id", "JOB_ID"))
+                .arg(
+                    option("file", "PATH")
+                        .value_hint(ValueHint::FilePath)
+                        .required(true),
+                ),
+        )
+        .subcommand(
+            Command::new("pause")
+                .about("Pause a job")
+                .arg(required("job_id", "JOB_ID")),
+        )
+        .subcommand(
+            Command::new("resume")
+                .about("Resume a paused job")
+                .arg(required("job_id", "JOB_ID")),
+        )
+        .subcommand(
+            Command::new("run")
+                .about("Run a job immediately")
+                .arg(required("job_id", "JOB_ID")),
+        )
+        .subcommand(
+            Command::new("rm")
+                .about("Remove a job")
+                .arg(required("job_id", "JOB_ID")),
+        )
+        .subcommand(
+            Command::new("runs")
+                .about("Show recent runs")
+                .arg(required("job_id", "JOB_ID")),
+        )
+        .subcommand(Command::new("doctor").about("Validate jobs and local prerequisites"))
+}
+
+fn history_command() -> Command {
+    Command::new("history")
+        .about("Search local Claude and Codex conversations and resume a session")
+        .subcommand(
+            Command::new("search")
+                .about("Search indexed conversational messages")
+                .arg(option("query", "TEXT").conflicts_with("stdin"))
+                .arg(flag("stdin").conflicts_with("query"))
+                .arg(option("provider", "claude|codex"))
+                .arg(option("cwd", "PATH").value_hint(ValueHint::DirPath))
+                .arg(option("from", "YYYY-MM-DD"))
+                .arg(option("until", "YYYY-MM-DD"))
+                .arg(option("limit", "N"))
+                .arg(json_flag()),
+        )
+        .subcommand(
+            Command::new("open")
+                .about("Resume a session in a new pane")
+                .arg(required("provider", "claude|codex"))
+                .arg(required("session_id", "SESSION_ID"))
+                .arg(json_flag()),
+        )
+}
+
+fn learn_command() -> Command {
+    Command::new("learn")
+        .about("Inspect automatic Learn changes")
+        .subcommand(
+            Command::new("status")
+                .about("Summarize the full Learn ledger")
+                .arg(json_flag()),
+        )
+        .subcommand(
+            Command::new("list")
+                .about("List recent Learn ledger items")
+                .arg(option("limit", "1..100"))
+                .arg(json_flag()),
+        )
+        .subcommand(
+            Command::new("show")
+                .about("Show redacted Learn change metadata")
+                .arg(required("change_id", "CHANGE_ID"))
+                .arg(json_flag()),
+        )
+        .subcommand(
+            Command::new("diff")
+                .about("Show redacted structural Learn diff")
+                .arg(required("change_id", "CHANGE_ID"))
+                .arg(json_flag()),
+        )
+        .subcommand(
+            Command::new("undo")
+                .about("Restore the exact backup if the target is unchanged")
+                .arg(
+                    Arg::new("change_id")
+                        .value_name("CHANGE_ID")
+                        .conflicts_with("date"),
+                )
+                .arg(option("date", "YYYY-MM-DD").conflicts_with("change_id"))
+                .group(
+                    ArgGroup::new("undo_target")
+                        .args(["change_id", "date"])
+                        .required(true),
+                )
+                .arg(json_flag()),
+        )
+}
+
+fn route_command() -> Command {
+    Command::new("route")
+        .about("Preview or dispatch a task to a selected agent")
+        .arg(
+            option("file", "PATH")
+                .value_hint(ValueHint::FilePath)
+                .conflicts_with("stdin"),
+        )
+        .arg(flag("stdin").conflicts_with("file"))
+        .arg(repeatable_option("tag", "TAG"))
+        .arg(option("project", "PROJECT"))
+        .arg(flag("worktree"))
+        .arg(option("context", "BUNDLE_ID"))
+        .arg(flag("wait"))
+        .arg(option("timeout", "MS"))
+        .arg(json_flag())
+        .subcommand(
+            Command::new("preview")
+                .about("Explain routing without creating a pane or sending a prompt")
+                .arg(
+                    option("file", "PATH")
+                        .value_hint(ValueHint::FilePath)
+                        .conflicts_with("stdin"),
+                )
+                .arg(flag("stdin").conflicts_with("file"))
+                .arg(repeatable_option("tag", "TAG"))
+                .arg(option("project", "PROJECT"))
+                .arg(json_flag()),
+        )
+        .subcommand(
+            Command::new("submit")
+                .about("Create a pane, start the selected agent, and send the task once")
+                .arg(
+                    option("file", "PATH")
+                        .value_hint(ValueHint::FilePath)
+                        .conflicts_with("stdin"),
+                )
+                .arg(flag("stdin").conflicts_with("file"))
+                .arg(repeatable_option("tag", "TAG"))
+                .arg(option("project", "PROJECT"))
+                .arg(flag("worktree"))
+                .arg(option("context", "BUNDLE_ID"))
+                .arg(flag("wait"))
+                .arg(option("timeout", "MS"))
                 .arg(json_flag()),
         )
 }
@@ -999,6 +1193,62 @@ fn path_arg(name: &'static str, value_name: &'static str) -> Arg {
     required(name, value_name).value_hint(ValueHint::AnyPath)
 }
 
+fn knowledge_options(c: Command) -> Command {
+    let description = match c.get_name() {
+        "status" => "Inspect knowledge index and worker status",
+        "doctor" => "Check authenticated CLI prerequisites without a model call",
+        "index" => "Index Markdown and optionally build GraphRAG",
+        "search" => "Search note sources",
+        "related" => "Inspect explicit note relationships",
+        "ask" => "Answer with source-grounded GraphRAG",
+        "capture" => "Propose a learning from a completed session",
+        "review" => "Accept, reject or undo a captured note",
+        "proposals" => "Inspect captured learning proposals",
+        "build" => "Build project context without submitting a task",
+        "show" => "Inspect a persistent knowledge job",
+        "cancel" => "Cancel a pending or running knowledge job",
+        _ => "Inspect knowledge",
+    };
+    c.about(description)
+        .arg(flag("json"))
+        .arg(flag("completed"))
+        .arg(flag("rebuild"))
+        .arg(flag("stdin"))
+        .arg(flag("graph"))
+        .arg(option("query", "TEXT"))
+        .arg(option("project", "PROJECT"))
+        .arg(option("kind", "TYPE"))
+        .arg(option("status", "STATUS"))
+        .arg(option("service", "SERVICE"))
+        .arg(option("id", "ID"))
+        .arg(option("mode", "MODE"))
+        .arg(option("provider", "PROVIDER"))
+        .arg(option("title", "TITLE"))
+}
+fn knowledge_command() -> Command {
+    let mut c =
+        Command::new("knowledge").about("Local Markdown knowledge and source-grounded GraphRAG");
+    for name in [
+        "status",
+        "doctor",
+        "index",
+        "search",
+        "related",
+        "ask",
+        "capture",
+        "review",
+        "proposals",
+    ] {
+        c = c.subcommand(knowledge_options(Command::new(name)));
+    }
+    c.subcommand(
+        Command::new("jobs")
+            .about("Inspect or cancel knowledge jobs")
+            .subcommand(knowledge_options(Command::new("show")))
+            .subcommand(knowledge_options(Command::new("cancel"))),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use clap::{Arg, Command};
@@ -1090,19 +1340,19 @@ mod tests {
 
         for path in paths {
             for flag in ["-h", "--help"] {
-                let mut args = vec!["herdr".to_string()];
+                let mut args = vec!["mercury".to_string()];
                 args.extend(path.iter().cloned());
                 args.push(flag.to_string());
                 let mut output = Vec::new();
                 assert!(
                     super::write_requested_help(&args, &mut output, || {}).unwrap(),
-                    "help was not handled for herdr {} {flag}",
+                    "help was not handled for mercury {} {flag}",
                     path.join(" ")
                 );
                 let output = String::from_utf8(output).unwrap();
                 assert!(
-                    output.contains(&format!("Usage: herdr {}", path.join(" "))),
-                    "unexpected help for herdr {}: {output}",
+                    output.contains(&format!("Usage: mercury {}", path.join(" "))),
+                    "unexpected help for mercury {}: {output}",
                     path.join(" ")
                 );
             }
@@ -1172,7 +1422,7 @@ mod tests {
             for option in options {
                 assert!(
                     option_arg(&cmd, option).is_required_set(),
-                    "herdr {} --{option} should be required",
+                    "mercury {} --{option} should be required",
                     path.join(" ")
                 );
             }
@@ -1183,7 +1433,7 @@ mod tests {
     fn agent_prompt_until_requires_wait() {
         let error = super::command()
             .try_get_matches_from([
-                "herdr", "agent", "prompt", "reviewer", "hello", "--until", "idle",
+                "mercury", "agent", "prompt", "reviewer", "hello", "--until", "idle",
             ])
             .unwrap_err();
         assert_eq!(
@@ -1195,14 +1445,16 @@ mod tests {
     #[test]
     fn agent_rename_requires_exactly_one_name_or_clear() {
         for valid in [
-            &["herdr", "agent", "rename", "reviewer", "worker"][..],
-            &["herdr", "agent", "rename", "reviewer", "--clear"][..],
+            &["mercury", "agent", "rename", "reviewer", "worker"][..],
+            &["mercury", "agent", "rename", "reviewer", "--clear"][..],
         ] {
             assert!(super::command().try_get_matches_from(valid).is_ok());
         }
         for invalid in [
-            &["herdr", "agent", "rename", "reviewer"][..],
-            &["herdr", "agent", "rename", "reviewer", "worker", "--clear"][..],
+            &["mercury", "agent", "rename", "reviewer"][..],
+            &[
+                "mercury", "agent", "rename", "reviewer", "worker", "--clear",
+            ][..],
         ] {
             assert!(super::command().try_get_matches_from(invalid).is_err());
         }
@@ -1210,7 +1462,7 @@ mod tests {
         let mut help = Vec::new();
         super::write_requested_help(
             &[
-                "herdr".to_string(),
+                "mercury".to_string(),
                 "agent".to_string(),
                 "rename".to_string(),
                 "--help".to_string(),
@@ -1221,7 +1473,7 @@ mod tests {
         .unwrap();
         assert!(String::from_utf8(help)
             .unwrap()
-            .contains("Usage: herdr agent rename <TARGET> <NAME>|--clear"));
+            .contains("Usage: mercury agent rename <TARGET> <NAME>|--clear"));
     }
 
     #[test]
@@ -1231,7 +1483,7 @@ mod tests {
             let worktree_command = command_path(&cmd, &["worktree", subcommand]);
             assert!(
                 !has_option(worktree_command, "json"),
-                "herdr worktree {subcommand} should not advertise --json"
+                "mercury worktree {subcommand} should not advertise --json"
             );
         }
     }
@@ -1319,13 +1571,13 @@ mod tests {
     }
 
     fn long_help(path: &[&str]) -> String {
-        let mut args = vec!["herdr".to_string()];
+        let mut args = vec!["mercury".to_string()];
         args.extend(path.iter().map(|segment| segment.to_string()));
         args.push("--help".to_string());
         let mut output = Vec::new();
         assert!(
             super::write_requested_help(&args, &mut output, || {}).unwrap(),
-            "help was not handled for herdr {}",
+            "help was not handled for mercury {}",
             path.join(" ")
         );
         String::from_utf8(output).unwrap()
@@ -1337,7 +1589,7 @@ mod tests {
             let help = long_help(&[group]);
             assert!(
                 help.contains(super::super::AGENT_HELP_FOOTER),
-                "herdr {group} is missing agent resources: {help}"
+                "mercury {group} is missing agent resources: {help}"
             );
         }
 
@@ -1356,14 +1608,14 @@ mod tests {
             "agent start dropped its existing after_help: {agent_start}"
         );
         assert!(
-            agent_start.contains("next: herdr agent prompt <TARGET> <TEXT> --wait"),
+            agent_start.contains("next: mercury agent prompt <TARGET> <TEXT> --wait"),
             "agent start is missing its next-step hint: {agent_start}"
         );
 
         let pane_send_text = long_help(&["pane", "send-text"]);
         assert!(
             pane_send_text.contains(
-                "next: herdr pane run <PANE_ID> <COMMAND> sends text and Enter in one call"
+                "next: mercury pane run <PANE_ID> <COMMAND> sends text and Enter in one call"
             ),
             "pane send-text is missing its next-step hint: {pane_send_text}"
         );
@@ -1380,7 +1632,7 @@ mod tests {
         ] {
             let mut cmd = super::command();
             let mut output = Vec::new();
-            clap_complete::generate(shell, &mut cmd, "herdr", &mut output);
+            clap_complete::generate(shell, &mut cmd, "mercury", &mut output);
             assert!(!output.is_empty(), "empty {shell:?} completion output");
         }
     }

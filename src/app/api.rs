@@ -2,14 +2,18 @@ use std::time::{Duration, Instant};
 
 mod agent_view;
 mod agents;
+mod cron;
 mod env;
 mod integrations;
 mod layouts;
+mod learn;
 mod panes;
 pub(crate) mod plugins;
 pub(super) mod responses;
+mod route;
 mod session;
 mod tabs;
+mod usage;
 mod workspaces;
 mod worktrees;
 
@@ -33,6 +37,47 @@ impl App {
                 results,
                 cache_updates,
             } => self.handle_git_status_refreshed(results, cache_updates),
+            AppEvent::UsageRefreshed { sessions, limits } => {
+                self.handle_usage_refreshed(sessions, limits)
+            }
+            AppEvent::UsageHistoryScanned { sessions } => {
+                self.handle_usage_history_scanned(sessions)
+            }
+            AppEvent::CodexUsageRefreshed {
+                identity,
+                limits,
+                costs,
+                error,
+            } => {
+                self.update_codex_identity(identity);
+                self.handle_codex_usage_refreshed(limits, costs, error)
+            }
+            AppEvent::ClaudeAccountUsageRefreshed {
+                limits,
+                identity,
+                error,
+            } => self.handle_claude_account_usage(limits, identity, error),
+            AppEvent::RouteLimitsRefreshed { limits } => self.handle_route_limits_refreshed(limits),
+            AppEvent::UsageCostRecorded { entries } => self.handle_usage_cost_recorded(entries),
+            AppEvent::CronCompleted { run, result } => {
+                self.handle_cron_completed(*run, result);
+                true
+            }
+            AppEvent::LearnRouteChanged => {
+                let report = self.reload_config();
+                if !matches!(report.status, crate::config::ConfigReloadStatus::Applied) {
+                    tracing::warn!("Learn route change needs manual config reload inspection");
+                }
+                true
+            }
+            AppEvent::LearnCronChanged => {
+                if let Some(cron) = self.cron.as_mut() {
+                    if let Err(error) = cron.scheduler.reload_jobs() {
+                        tracing::warn!(%error, "Learn Cron change needs manual inspection");
+                    }
+                }
+                true
+            }
             AppEvent::TabBarCommandFinished {
                 generation,
                 segment_index,
@@ -82,6 +127,68 @@ impl App {
         changed
     }
 
+    fn handle_usage_refreshed(
+        &mut self,
+        sessions: Vec<crate::events::TerminalUsageUpdate>,
+        limits: Vec<mercury_usage::ProviderLimits>,
+    ) -> bool {
+        let changed = self.apply_usage_refreshed(sessions, limits);
+        if changed {
+            self.render_dirty.request_generic();
+            self.render_notify.notify_one();
+        }
+        changed
+    }
+
+    fn handle_usage_history_scanned(
+        &mut self,
+        sessions: Vec<mercury_usage::history_scan::HistoricalSession>,
+    ) -> bool {
+        let changed = self.apply_usage_history_scanned(sessions);
+        if changed {
+            self.render_dirty.request_generic();
+            self.render_notify.notify_one();
+        }
+        changed
+    }
+
+    fn handle_usage_cost_recorded(&mut self, entries: Vec<mercury_usage::CostLedgerEntry>) -> bool {
+        let changed = self.apply_usage_cost_recorded(entries);
+        if changed {
+            self.render_dirty.request_generic();
+            self.render_notify.notify_one();
+        }
+        changed
+    }
+
+    fn handle_claude_account_usage(
+        &mut self,
+        limits: Option<mercury_usage::ProviderLimits>,
+        identity: Option<String>,
+        error: Option<String>,
+    ) -> bool {
+        let changed = self.apply_claude_account_usage(limits, identity, error);
+        if changed {
+            self.render_dirty.request_generic();
+            self.render_notify.notify_one();
+        }
+        changed
+    }
+
+    fn handle_codex_usage_refreshed(
+        &mut self,
+        limits: Option<mercury_usage::ProviderLimits>,
+        costs: Vec<(String, f64)>,
+        error: Option<String>,
+    ) -> bool {
+        let changed = self.apply_codex_usage_refreshed(limits, costs, error);
+        if changed {
+            self.render_dirty.request_generic();
+            self.render_notify.notify_one();
+        }
+        changed
+    }
+
     pub(crate) fn handle_internal_event(&mut self, ev: AppEvent) {
         let _ = self.handle_internal_event_with_pane_updates(ev);
     }
@@ -120,6 +227,69 @@ impl App {
         } = ev
         {
             self.handle_git_status_refreshed(results, cache_updates);
+            return Vec::new();
+        }
+
+        if let AppEvent::UsageRefreshed { sessions, limits } = ev {
+            self.handle_usage_refreshed(sessions, limits);
+            return Vec::new();
+        }
+
+        if let AppEvent::UsageHistoryScanned { sessions } = ev {
+            self.handle_usage_history_scanned(sessions);
+            return Vec::new();
+        }
+
+        if let AppEvent::CodexUsageRefreshed {
+            identity,
+            limits,
+            costs,
+            error,
+        } = ev
+        {
+            self.update_codex_identity(identity);
+            self.handle_codex_usage_refreshed(limits, costs, error);
+            return Vec::new();
+        }
+
+        if let AppEvent::ClaudeAccountUsageRefreshed {
+            limits,
+            identity,
+            error,
+        } = ev
+        {
+            self.handle_claude_account_usage(limits, identity, error);
+            return Vec::new();
+        }
+        if let AppEvent::RouteLimitsRefreshed { limits } = ev {
+            self.handle_route_limits_refreshed(limits);
+            return Vec::new();
+        }
+
+        if let AppEvent::UsageCostRecorded { entries } = ev {
+            self.handle_usage_cost_recorded(entries);
+            return Vec::new();
+        }
+
+        if let AppEvent::CronCompleted { run, result } = ev {
+            self.handle_cron_completed(*run, result);
+            return Vec::new();
+        }
+
+        if let AppEvent::LearnRouteChanged = ev {
+            let report = self.reload_config();
+            if !matches!(report.status, crate::config::ConfigReloadStatus::Applied) {
+                tracing::warn!("Learn route change needs manual config reload inspection");
+            }
+            return Vec::new();
+        }
+
+        if let AppEvent::LearnCronChanged = ev {
+            if let Some(cron) = self.cron.as_mut() {
+                if let Err(error) = cron.scheduler.reload_jobs() {
+                    tracing::warn!(%error, "Learn Cron change needs manual inspection");
+                }
+            }
             return Vec::new();
         }
 
@@ -225,7 +395,7 @@ impl App {
                     .publish_pane_process_exit_if_agent(*pane_id, false)
                 {
                     self.sync_full_lifecycle_authority_detection_pauses();
-                    self.refresh_new_herdr_toast_context_for_update(&update, &previous_toast);
+                    self.refresh_new_mercury_toast_context_for_update(&update, &previous_toast);
                     self.emit_pane_state_update(&update);
                 }
                 if self.runtime_exit_action(*pane_id) == RuntimeExitAction::RespawnShell
@@ -322,8 +492,113 @@ impl App {
                 None
             };
         let terminal_cwd_reported = matches!(ev, AppEvent::TerminalCwdReported { .. });
+        let codex_exit_trigger = match &ev {
+            AppEvent::StateChanged {
+                pane_id,
+                agent: Some(crate::detect::Agent::Codex),
+                process_exited: true,
+                observed_at,
+                ..
+            } => {
+                let key = (*pane_id, mercury_learn::transcript::Provider::Codex);
+                let accepted = self
+                    .learn_transcripts
+                    .get(&key)
+                    .is_some_and(|observed| *observed_at >= observed.accepted_at);
+                if accepted {
+                    let excluded_session = self.learn_excluded_sessions.remove(&key);
+                    self.learn_transcripts.remove(&key).and_then(|observed| {
+                        if excluded_session.as_deref() == Some(observed.session_id.as_str()) {
+                            return None;
+                        }
+                        let session_ref =
+                            crate::agent_resume::AgentSessionRef::id(&observed.session_id)?;
+                        let (ws_idx, _) = self.find_pane(*pane_id)?;
+                        self.pane_terminal(ws_idx, *pane_id)
+                            .is_some_and(|terminal| {
+                                terminal.session_ref_is_current_for(
+                                    "mercury:codex",
+                                    "codex",
+                                    &session_ref,
+                                )
+                            })
+                            .then(|| {
+                                crate::app::learn::ReviewTrigger::session_end(
+                                    mercury_learn::transcript::Provider::Codex,
+                                    &observed.session_id,
+                                    &observed.path,
+                                )
+                            })
+                            .flatten()
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        let codex_turn_probe = match &ev {
+            AppEvent::StateChanged {
+                pane_id,
+                agent: Some(crate::detect::Agent::Codex),
+                state: crate::detect::AgentState::Idle,
+                process_exited: false,
+                observed_at,
+                ..
+            } if self.learn_config.enabled => (|| {
+                let observed = self
+                    .learn_transcripts
+                    .get(&(*pane_id, mercury_learn::transcript::Provider::Codex))?;
+                if *observed_at < observed.accepted_at {
+                    return None;
+                }
+                if self
+                    .learn_excluded_sessions
+                    .get(&(*pane_id, mercury_learn::transcript::Provider::Codex))
+                    == Some(&observed.session_id)
+                {
+                    return None;
+                }
+                let session_ref = crate::agent_resume::AgentSessionRef::id(&observed.session_id)?;
+                let (ws_idx, _) = self.find_pane(*pane_id)?;
+                self.pane_terminal(ws_idx, *pane_id)
+                    .is_some_and(|terminal| {
+                        terminal.session_ref_is_current_for("mercury:codex", "codex", &session_ref)
+                    })
+                    .then(|| {
+                        crate::app::learn::ReviewTrigger::turn_probe(
+                            mercury_learn::transcript::Provider::Codex,
+                            &observed.session_id,
+                            &observed.path,
+                            self.learn_config.review_every_turns,
+                        )
+                    })
+                    .flatten()
+            })(),
+            _ => None,
+        };
+        // Immediate usage-poll trigger (D3): a hook-reported session/state
+        // change, or a fallback state transition (including working ->
+        // idle/done), should not wait out the adaptive polling cadence.
+        let usage_trigger_pane_id = match &ev {
+            AppEvent::HookStateReported { pane_id, .. }
+            | AppEvent::AgentSessionReported { pane_id, .. }
+            | AppEvent::StateChanged { pane_id, .. } => Some(*pane_id),
+            _ => None,
+        };
         let previous_toast = self.state.toast.clone();
         let mut pane_updates = self.state.handle_app_event(ev);
+        if self.learn_config.enabled {
+            if let (Some(worker), Some(trigger)) = (self.learn.as_ref(), codex_exit_trigger) {
+                let _ = worker.submit(trigger);
+            }
+            if let (Some(worker), Some(trigger)) = (self.learn.as_ref(), codex_turn_probe) {
+                let _ = worker.submit(trigger);
+            }
+        }
+        if let Some(pane_id) = usage_trigger_pane_id {
+            self.request_immediate_usage_refresh_for_pane(pane_id);
+        }
         if update_ready.is_some() {
             self.state.latest_release_notes = crate::release_notes::load_latest();
         }
@@ -353,7 +628,7 @@ impl App {
             self.render_notify.notify_one();
         }
         for update in &pane_updates {
-            self.refresh_new_herdr_toast_context_for_update(update, &previous_toast);
+            self.refresh_new_mercury_toast_context_for_update(update, &previous_toast);
             self.emit_pane_state_update(update);
         }
         self.sync_agent_metadata_deadline();
@@ -404,14 +679,14 @@ impl App {
         }
     }
 
-    pub(crate) fn refresh_new_herdr_toast_context_for_update(
+    pub(crate) fn refresh_new_mercury_toast_context_for_update(
         &mut self,
         update: &crate::app::actions::PaneStateUpdate,
         previous_toast: &Option<crate::app::state::ToastNotification>,
     ) {
         if !matches!(
             self.state.toast_config.delivery,
-            crate::config::ToastDelivery::Herdr
+            crate::config::ToastDelivery::Mercury
         ) || self.state.toast == *previous_toast
         {
             return;
@@ -631,7 +906,7 @@ impl App {
             .state
             .publish_pane_process_exit_if_agent(pane_id, true)?;
         self.sync_full_lifecycle_authority_detection_pauses();
-        self.refresh_new_herdr_toast_context_for_update(&update, &previous_toast);
+        self.refresh_new_mercury_toast_context_for_update(&update, &previous_toast);
         self.emit_pane_state_update(&update);
         Some(update)
     }
@@ -1158,9 +1433,58 @@ impl App {
             Method::PaneReportAgentSession(params) => {
                 return self.handle_pane_report_agent_session(request.id, params);
             }
+            Method::LearnClaudeSessionEnd(params) => {
+                return self.handle_learn_claude_session_end(request.id, params);
+            }
+            Method::LearnClaudeTurnEnd(params) => {
+                return self.handle_learn_claude_turn_end(request.id, params);
+            }
             Method::PaneReportMetadata(params) => {
                 return self.handle_pane_report_metadata(request.id, params);
             }
+            Method::UsageRefresh(_) => {
+                self.refresh_account_usage();
+                return responses::encode_success(
+                    request.id,
+                    crate::api::schema::ResponseResult::Ok {},
+                );
+            }
+            Method::UsageReportStatusline(params) => {
+                return self.handle_usage_report_statusline(request.id, params);
+            }
+            Method::RoutePreview(params) => {
+                return self.handle_route_preview(request.id, params, None)
+            }
+            Method::Knowledge(_) | Method::HistorySearch(_) | Method::HistoryResolve(_) => {
+                return responses::encode_error(
+                    request.id,
+                    "server_only",
+                    "history requests require the headless server",
+                )
+            }
+            Method::LearnList(_)
+            | Method::LearnStatus(_)
+            | Method::LearnShow(_)
+            | Method::LearnDiff(_)
+            | Method::LearnUndo(_)
+            | Method::LearnUndoDate(_) => {
+                return responses::encode_error(
+                    request.id,
+                    "server_only",
+                    "learn inspection requires the headless server",
+                )
+            }
+            Method::CronPreview(params) => return self.handle_cron_preview(request.id, params),
+            Method::CronAdd(params) => return self.handle_cron_add(request.id, params),
+            Method::CronList(_) => return self.handle_cron_list(request.id),
+            Method::CronGet(params) => return self.handle_cron_get(request.id, params),
+            Method::CronEdit(params) => return self.handle_cron_edit(request.id, params),
+            Method::CronPause(params) => return self.handle_cron_pause(request.id, params),
+            Method::CronRun(params) => return self.handle_cron_run(request.id, params),
+            Method::CronRemove(params) => return self.handle_cron_remove(request.id, params),
+            Method::CronRuns(params) => return self.handle_cron_runs(request.id, params),
+            Method::CronLog(params) => return self.handle_cron_log(request.id, params),
+            Method::CronDoctor(_) => return self.handle_cron_doctor(request.id),
             Method::PaneClearAgentAuthority(params) => {
                 return self.handle_pane_clear_agent_authority(request.id, params);
             }
@@ -1251,7 +1575,7 @@ impl App {
 
         let reason = match self.state.toast_config.delivery {
             crate::config::ToastDelivery::Off => NotificationShowReason::Disabled,
-            crate::config::ToastDelivery::Herdr => {
+            crate::config::ToastDelivery::Mercury => {
                 if self.state.toast.is_some() {
                     NotificationShowReason::Busy
                 } else if self.api_notification_rate_limited(Instant::now()) {
@@ -1687,7 +2011,7 @@ mod tests {
             .get_mut(&terminal_id)
             .unwrap()
             .set_hook_authority(
-                "herdr:omp".to_string(),
+                "mercury:omp".to_string(),
                 "omp".to_string(),
                 AgentState::Working,
                 None,
@@ -1779,7 +2103,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn herdr_toast_context_uses_live_root_runtime_cwd_label() {
+    async fn mercury_toast_context_uses_live_root_runtime_cwd_label() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &crate::config::Config::default(),
@@ -1794,15 +2118,15 @@ mod tests {
         let root = workspace.tabs[0].root_pane;
         let terminal_id = workspace.terminal_id(root).cloned().unwrap();
         let temp_root = std::env::temp_dir().join(format!(
-            "herdr-toast-context-{}-{}",
+            "mercury-toast-context-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
-        let stale_cwd = temp_root.join("__herdr_original__");
-        let live_cwd = temp_root.join("__herdr_projects__");
+        let stale_cwd = temp_root.join("__mercury_original__");
+        let live_cwd = temp_root.join("__mercury_projects__");
         std::fs::create_dir_all(&stale_cwd).unwrap();
         std::fs::create_dir_all(&live_cwd).unwrap();
         init_repo(&stale_cwd);
@@ -1815,7 +2139,7 @@ mod tests {
         app.state.active = None;
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Mercury;
         app.state.toast_config.delay_seconds = 0;
 
         let (events, _) = tokio::sync::mpsc::channel(4);
@@ -1861,7 +2185,7 @@ mod tests {
 
         assert_eq!(
             app.state.toast.as_ref().map(|toast| toast.context.as_str()),
-            Some("__herdr_projects__ · 1")
+            Some("__mercury_projects__ · 1")
         );
 
         for (_, runtime) in app.terminal_runtimes.drain() {
@@ -1872,7 +2196,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn delayed_herdr_toast_context_uses_live_root_runtime_cwd_label() {
+    async fn delayed_mercury_toast_context_uses_live_root_runtime_cwd_label() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &crate::config::Config::default(),
@@ -1887,15 +2211,15 @@ mod tests {
         let root = workspace.tabs[0].root_pane;
         let terminal_id = workspace.terminal_id(root).cloned().unwrap();
         let temp_root = std::env::temp_dir().join(format!(
-            "herdr-delayed-toast-context-{}-{}",
+            "mercury-delayed-toast-context-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
-        let stale_cwd = temp_root.join("__herdr_original__");
-        let live_cwd = temp_root.join("__herdr_projects__");
+        let stale_cwd = temp_root.join("__mercury_original__");
+        let live_cwd = temp_root.join("__mercury_projects__");
         std::fs::create_dir_all(&stale_cwd).unwrap();
         std::fs::create_dir_all(&live_cwd).unwrap();
         init_repo(&stale_cwd);
@@ -1908,7 +2232,7 @@ mod tests {
         app.state.active = None;
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Mercury;
         app.state.toast_config.delay_seconds = 1;
 
         let (events, _) = tokio::sync::mpsc::channel(4);
@@ -1965,7 +2289,7 @@ mod tests {
                 .first()
                 .and_then(|delivery| delivery.toast.as_ref())
                 .map(|toast| toast.context.as_str()),
-            Some("__herdr_projects__ · 1")
+            Some("__mercury_projects__ · 1")
         );
 
         for (_, runtime) in app.terminal_runtimes.drain() {
@@ -2107,7 +2431,7 @@ mod tests {
         terminal.set_detected_state(Some(Agent::Codex), AgentState::Working);
         terminal
             .set_hook_authority_at(
-                "herdr:codex".into(),
+                "mercury:codex".into(),
                 "codex".into(),
                 AgentState::Working,
                 None,
@@ -2253,7 +2577,7 @@ mod tests {
         terminal.respawn_shell_on_exit = true;
         terminal.set_agent_name("codex".into());
         terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
-            source: "herdr:codex".into(),
+            source: "mercury:codex".into(),
             agent: "codex".into(),
             session_ref: crate::agent_resume::AgentSessionRef::id("codex-session")
                 .expect("test session id should be valid"),
@@ -2412,13 +2736,13 @@ mod tests {
         );
         let mut workspace = crate::workspace::Workspace::test_new("stale");
         workspace.custom_name = None;
-        workspace.identity_cwd = "/__herdr_original__".into();
+        workspace.identity_cwd = "/__mercury_original__".into();
         let root = workspace.tabs[0].root_pane;
         let terminal_id = workspace.terminal_id(root).cloned().unwrap();
         let workspace_id = workspace.id.clone();
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
-        app.state.terminals.get_mut(&terminal_id).unwrap().cwd = "/__herdr_projects__".into();
+        app.state.terminals.get_mut(&terminal_id).unwrap().cwd = "/__mercury_projects__".into();
         app.state.active = None;
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
@@ -2436,7 +2760,7 @@ mod tests {
         app.state.toast = Some(crate::app::state::ToastNotification {
             kind: ToastKind::Finished,
             title: "codex finished".into(),
-            context: "__herdr_original__ · 1".into(),
+            context: "__mercury_original__ · 1".into(),
             position: None,
             target: Some(crate::app::state::ToastTarget {
                 workspace_id,
@@ -2456,7 +2780,7 @@ mod tests {
 
         assert_eq!(
             app.state.toast.as_ref().map(|toast| toast.context.as_str()),
-            Some("__herdr_original__ · 1")
+            Some("__mercury_original__ · 1")
         );
     }
 }

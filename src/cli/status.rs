@@ -35,10 +35,10 @@ fn parse_status_args(args: &[String]) -> Option<(StatusScope, bool)> {
         None => Some((StatusScope::Full, false)),
         Some("--json") if args.len() == 1 => Some((StatusScope::Full, true)),
         Some("server") => {
-            parse_status_scope_args(args, StatusScope::Server, "herdr status server [--json]")
+            parse_status_scope_args(args, StatusScope::Server, "mercury status server [--json]")
         }
         Some("client") => {
-            parse_status_scope_args(args, StatusScope::Client, "herdr status client [--json]")
+            parse_status_scope_args(args, StatusScope::Client, "mercury status client [--json]")
         }
         Some("help" | "--help" | "-h") => {
             if args.len() > 1 {
@@ -278,6 +278,7 @@ struct ServerCapabilitiesJson {
     live_handoff: bool,
     detached_server_daemon: bool,
     endpoint_protocol_generation: Option<u32>,
+    mercury_feature_generation: Option<u32>,
     surface_interest: bool,
     health_check: bool,
     ssh_agent_registration: bool,
@@ -324,6 +325,7 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
                     live_handoff: capabilities.live_handoff,
                     detached_server_daemon: capabilities.detached_server_daemon,
                     endpoint_protocol_generation: capabilities.endpoint_protocol_generation,
+                    mercury_feature_generation: capabilities.mercury_feature_generation,
                     surface_interest: capabilities.surface_interest,
                     health_check: capabilities.health_check,
                     ssh_agent_registration: capabilities.ssh_agent_registration,
@@ -374,7 +376,11 @@ fn restart_needed_bool(server: &ServerRuntimeStatus) -> Option<bool> {
             capabilities
                 .as_ref()
                 .and_then(|value| value.endpoint_protocol_generation)
-                != Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
+                != Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION)
+                || capabilities
+                    .as_ref()
+                    .and_then(|value| value.mercury_feature_generation)
+                    != Some(crate::api::schema::server::MERCURY_FEATURE_GENERATION),
         ),
         ServerRuntimeStatus::NotRunning => Some(false),
     }
@@ -382,9 +388,17 @@ fn restart_needed_bool(server: &ServerRuntimeStatus) -> Option<bool> {
 
 fn server_binary_stale_bool(server: &ServerRuntimeStatus) -> Option<bool> {
     match server {
-        ServerRuntimeStatus::Running { version, .. } => version
-            .as_deref()
-            .map(|version| version != crate::build_info::version()),
+        ServerRuntimeStatus::Running {
+            version,
+            capabilities,
+            ..
+        } => version.as_deref().map(|version| {
+            version != crate::build_info::version()
+                || capabilities
+                    .as_ref()
+                    .and_then(|value| value.mercury_feature_generation)
+                    != Some(crate::api::schema::server::MERCURY_FEATURE_GENERATION)
+        }),
         ServerRuntimeStatus::NotRunning => Some(false),
     }
 }
@@ -401,10 +415,10 @@ fn current_exe_label() -> String {
 }
 
 fn print_status_help() {
-    eprintln!("herdr status commands:");
-    eprintln!("  herdr status [--json]         show local client and running server status");
-    eprintln!("  herdr status server [--json]  show running server status");
-    eprintln!("  herdr status client [--json]  show local client binary status");
+    eprintln!("mercury status commands:");
+    eprintln!("  mercury status [--json]         show local client and running server status");
+    eprintln!("  mercury status server [--json]  show running server status");
+    eprintln!("  mercury status client [--json]  show local client binary status");
 }
 
 #[cfg(test)]
@@ -422,6 +436,7 @@ mod tests {
                 live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: endpoint_generation,
+                mercury_feature_generation: Some(crate::api::schema::MERCURY_FEATURE_GENERATION),
                 surface_interest: true,
                 health_check: true,
                 ssh_agent_registration: false,
@@ -453,5 +468,26 @@ mod tests {
 
         assert_eq!(restart_needed_bool(&server), Some(true));
         assert_eq!(server_binary_stale_bool(&server), Some(false));
+    }
+
+    #[test]
+    fn same_version_server_without_mercury_features_requires_restart() {
+        let mut server = running_server(
+            Some(crate::build_info::version().as_str()),
+            Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
+        );
+        let ServerRuntimeStatus::Running { capabilities, .. } = &mut server else {
+            panic!("expected running server");
+        };
+        capabilities.as_mut().unwrap().mercury_feature_generation = None;
+
+        assert_eq!(restart_needed_bool(&server), Some(true));
+        assert_eq!(server_binary_stale_bool(&server), Some(true));
+        let json = serde_json::to_value(server_status_json(&server)).unwrap();
+        assert_eq!(json["endpoint_compatible"], true);
+        assert_eq!(
+            json["capabilities"]["mercury_feature_generation"],
+            serde_json::Value::Null
+        );
     }
 }
