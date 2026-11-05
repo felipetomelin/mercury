@@ -782,3 +782,18 @@ Tomadas em 2026-10-05:
 7. **Usage:** janelas por hora, janelas de calendário (incl. mensal em USD), orçamento por agente, fetch orientado a eventos; sem tabela de preços própria.
 8. **Licença:** arquivos de licença removidos.
 9. **Desenvolvimento:** roteamento Sonnet 5 / Sonnet 5.5 / Opus 5.5 (seção 5.1).
+
+
+## Instalação local do comando — spec 010 (2026-11-05)
+
+Implementado `bash scripts/install-local.sh`: build release por padrão, perfil
+`--profile dev` para preservar mercury-dev, prefixo local sem sudo, cópia
+independente do checkout, diagnóstico PATH e uninstall restrito à instalação
+gerenciada. Conflitos/redirects recusados; atualização por rename sem reiniciar
+servidor. Nesta máquina o comando `mercury` está instalado com o build dev
+existente; configuração e inventário preservados. README EN/PT e guia atualizados.
+
+29 testes do instalador, checks de manutenção selecionados, builds reais dev e
+release, smoke dos dois perfis, Clippy e formatação validados. Não há release
+binária/feed novo, nem qualificação Linux/Windows adicional. Evidências e limites
+em `docs/dev/local-install-010-review.md`; spec/plano em `specs/010-local-cli-install/`.

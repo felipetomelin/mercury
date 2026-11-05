@@ -10,7 +10,10 @@ For the connected-account Usage dashboard, guided Cron editor and local memory,
 see the [Usage and Crons guide](./docs/dev/usage-cron-guide.md).
 
 
-For local use after building, run `target/debug/mercury` from this checkout.
+To install the development build as the `mercury` command, run
+`bash scripts/install-local.sh --profile dev`. For an existing debug build,
+add `--no-build`. See [installation and updating](docs/dev/local-install.md).
+You can also run `target/debug/mercury` directly from this checkout.
 Usage, themes, crons, routing, history, and the opt-in Learn flow are implemented
 locally. Real Claude/Codex smokes and visual inspection are left to the user;
 SonarQube/Veracode/Wiz and quantitative coverage were explicitly waived for

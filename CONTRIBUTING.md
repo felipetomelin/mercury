@@ -18,6 +18,10 @@ Use temporary fixtures for sessions, account responses, vaults and scheduled job
 Tests must not require personal credentials, call a paid model or execute a real
 user's scheduled task. Add focused regression coverage for behavior changes.
 
+For local installer changes, run `python3 -m unittest scripts.test_install_local`.
+These subprocess tests use temporary prefixes and fake build tools; they never
+replace your installed command or touch your Mercury configuration.
+
 Describe the problem, resulting behavior and validation in a pull request.
 For visual changes, include screenshots with fictional data; see
 [README asset generation](assets/mercury/README.md). Keep changes scoped and use

@@ -61,18 +61,25 @@ interface includes Portuguese labels. See <a href="assets/mercury/README.md">ass
 - [Zig 0.16.0](https://ziglang.org/download/) on `PATH`, or set `ZIG` to its executable. Mercury uses the vendored Ghostty terminal library.
 - Codex CLI and/or Claude Code, installed and authenticated separately.
 
-### 2. Build and open Mercury
+### 2. Install and open Mercury
 
 ```sh
 git clone https://github.com/felipetomelin/mercury.git
 cd mercury
-cargo build --release --locked
-./target/release/mercury config check
-./target/release/mercury
+bash scripts/install-local.sh
+mercury config check
+mercury
 ```
 
-This is a **source build**. Prebuilt releases, package-manager installation and
-the Mercury update feed are not published yet.
+The installer builds from source and adds the command under `~/.local/bin`,
+without `sudo`. Once that directory is on your `PATH`, run **`mercury` from any
+directory**. If needed, the installer prints the exact PATH setup command.
+
+Already using a debug build? Install with `--profile dev` to keep your
+`mercury-dev` configuration, sessions and local memory. Release uses separate
+`mercury` data. See [installation, updating and removal](docs/dev/local-install.md).
+Prebuilt releases, package-manager installation and the Mercury update feed
+are not published yet.
 
 ### 3. Explore the workspace
 
@@ -83,10 +90,10 @@ opens Crons. Use `a` to create a schedule, `e` to edit and `d` to delete it.
 With Mercury running, a second terminal can inspect its state:
 
 ```sh
-./target/release/mercury status
-./target/release/mercury cron list
-./target/release/mercury cron doctor
-./target/release/mercury knowledge status --json
+mercury status
+mercury cron list
+mercury cron doctor
+mercury knowledge status --json
 ```
 
 ## Bring your notes into the workflow
@@ -104,9 +111,9 @@ allow_external = false
 After reloading the config:
 
 ```sh
-./target/release/mercury server reload-config
-./target/release/mercury knowledge index --json
-./target/release/mercury knowledge search --query "deployment decisions" --json
+mercury server reload-config
+mercury knowledge index --json
+mercury knowledge search --query "deployment decisions" --json
 ```
 
 Text search and explicit links stay local. Graph extraction, model-assisted search
