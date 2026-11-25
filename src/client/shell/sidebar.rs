@@ -51,6 +51,7 @@ pub(crate) fn render_collapsed_sidebar(
     config: &ClientShellConfig,
     selected_workspace_id: Option<&str>,
     hits: &mut ShellHitMap,
+    endpoint: &ClientEndpointId,
 ) {
     let palette = &config.palette;
     let selection_background = workspace_selection_background(palette);
@@ -101,6 +102,14 @@ pub(crate) fn render_collapsed_sidebar(
             status_icon(status, config.status_indicators),
             Style::default().fg(status_color(status, palette)),
         );
+        if rect.width > 1 {
+            super::project_color::marker(
+                buffer,
+                rect.x + 1,
+                rect.y,
+                super::project_color::color(workspace.project_path.as_deref(), endpoint, palette),
+            );
+        }
         hits.workspaces.push(WorkspaceHit {
             rect,
             endpoint_id: ClientEndpointId::Local,
@@ -168,6 +177,19 @@ pub(crate) fn render_collapsed_sidebar(
             status_icon(agent.agent_status, config.status_indicators),
             Style::default().fg(status_color(agent.agent_status, palette)),
         );
+        if rect.width > 1 {
+            let path = snapshot
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.workspace_id == agent.workspace_id)
+                .and_then(|workspace| workspace.project_path.as_deref());
+            super::project_color::marker(
+                buffer,
+                rect.x + 1,
+                rect.y,
+                super::project_color::color(path, endpoint, palette),
+            );
+        }
         hits.agents.push((rect, pane_id));
     }
     hits.sidebar_toggle = if area.is_empty() || workspace_area.width == 0 {
@@ -334,6 +356,16 @@ pub(crate) fn render_sidebar(
             dragged,
             palette,
         );
+        super::project_color::workspace_marker(
+            buffer,
+            rect,
+            entry.indented,
+            super::project_color::color(
+                workspace.project_path.as_deref(),
+                state.active_endpoint_id,
+                palette,
+            ),
+        );
         let group_toggle = render_parent_group_toggle(
             buffer,
             rect,
@@ -437,6 +469,7 @@ pub(crate) fn render_sidebar(
         config,
         state.agent_scroll,
         hits,
+        state.active_endpoint_id,
     );
 
     hits.sidebar_toggle = Rect::new(

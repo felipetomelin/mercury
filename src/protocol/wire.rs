@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Current protocol version. Bumped when wire format changes incompatibly.
-pub const PROTOCOL_VERSION: u32 = 22;
+pub const PROTOCOL_VERSION: u32 = 23;
 
 /// Maximum allowed frame payload size (2 MB). Frames larger than this are
 /// rejected to prevent denial-of-service via oversized length prefixes.
@@ -1167,6 +1167,9 @@ pub struct ClientShellWorkspace {
     pub workspace_id: String,
     pub active_tab_id: String,
     pub new_workspace_cwd: String,
+    /// Stable project identity; older endpoint JSON snapshots may omit it.
+    #[serde(default)]
+    pub project_path: Option<String>,
     pub number: usize,
     pub label: String,
     pub custom_label: bool,
@@ -2995,6 +2998,7 @@ mod tests {
                 workspace_id: "w1".into(),
                 active_tab_id: "w1:t1".into(),
                 new_workspace_cwd: "/tmp".into(),
+                project_path: Some("/tmp".into()),
                 number: 1,
                 label: "shell".into(),
                 custom_label: false,

@@ -24,6 +24,10 @@ pub struct Parsed {
     pub cwd: Option<String>,
     pub timestamp: String,
     pub messages: Vec<String>,
+    pub title: Option<String>,
+    pub first_prompt: Option<String>,
+    pub is_subagent: bool,
+    has_main_messages: bool,
 }
 
 pub fn read(path: &Path, provider: Provider) -> std::io::Result<Option<Parsed>> {
@@ -34,6 +38,10 @@ pub fn read(path: &Path, provider: Provider) -> std::io::Result<Option<Parsed>> 
         cwd: None,
         timestamp: String::new(),
         messages: Vec::new(),
+        title: None,
+        first_prompt: None,
+        is_subagent: false,
+        has_main_messages: false,
     };
     let mut seen = HashMap::new();
     if provider == Provider::Claude {
@@ -66,9 +74,17 @@ pub fn read(path: &Path, provider: Provider) -> std::io::Result<Option<Parsed>> 
             Provider::Claude => parse_claude(&event, &mut parsed, &mut seen),
             Provider::Codex => parse_codex(&event, &mut parsed, &mut seen),
         }
+        // Subagent transcripts are not user history. Their session metadata is
+        // sufficient; avoid reading/indexing their messages and tool outputs.
+        if provider == Provider::Codex && parsed.is_subagent && safe_id(&parsed.session_id) {
+            break;
+        }
     }
     if !safe_id(&parsed.session_id) {
         return Ok(None);
+    }
+    if provider == Provider::Claude && parsed.has_main_messages {
+        parsed.is_subagent = false;
     }
     Ok(Some(parsed))
 }
@@ -78,12 +94,25 @@ fn parse_claude(event: &Value, parsed: &mut Parsed, seen: &mut HashMap<String, u
         parsed.cwd = absolute_cwd(event.get("cwd").and_then(Value::as_str));
     }
     if event.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+        parsed.is_subagent = true;
         return;
     }
     let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
+    if kind == "custom-title"
+        && event
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .is_none_or(|id| id == parsed.session_id)
+    {
+        parsed.title = event
+            .get("customTitle")
+            .and_then(Value::as_str)
+            .and_then(crate::titles::clean_title);
+    }
     if kind != "user" && kind != "assistant" {
         return;
     }
+    parsed.has_main_messages = true;
     let message = &event["message"];
     let role = message.get("role").and_then(Value::as_str).unwrap_or("");
     if role != kind {
@@ -105,6 +134,9 @@ fn parse_claude(event: &Value, parsed: &mut Parsed, seen: &mut HashMap<String, u
     let Some(text) = content_text(&message["content"], "text") else {
         return;
     };
+    if role == "user" && parsed.first_prompt.is_none() {
+        parsed.first_prompt = crate::titles::clean_title(&text);
+    }
     if let Some(identity) = identity {
         if let Some(index) = seen.get(&identity) {
             parsed.messages[*index] = text;
@@ -119,7 +151,16 @@ fn parse_codex(event: &Value, parsed: &mut Parsed, seen: &mut HashMap<String, us
     let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
     let payload = &event["payload"];
     if kind == "session_meta" {
-        if let Some(id) = payload.get("session_id").and_then(Value::as_str) {
+        let source = &payload["source"];
+        parsed.is_subagent |= source.get("subagent").is_some()
+            || source
+                .as_str()
+                .is_some_and(|source| source == "subagent" || source.starts_with("subagent_"));
+        if let Some(id) = payload
+            .get("id")
+            .or_else(|| payload.get("session_id"))
+            .and_then(Value::as_str)
+        {
             if safe_id(id) {
                 parsed.session_id = id.to_owned();
             }
@@ -127,6 +168,10 @@ fn parse_codex(event: &Value, parsed: &mut Parsed, seen: &mut HashMap<String, us
         if parsed.cwd.is_none() {
             parsed.cwd = absolute_cwd(payload.get("cwd").and_then(Value::as_str));
         }
+        parsed.title = payload
+            .get("title")
+            .and_then(Value::as_str)
+            .and_then(crate::titles::clean_title);
     } else if kind == "response_item"
         && payload.get("type").and_then(Value::as_str) == Some("message")
     {
@@ -144,6 +189,9 @@ fn parse_codex(event: &Value, parsed: &mut Parsed, seen: &mut HashMap<String, us
                     "output_text"
                 },
             ) {
+                if role == "user" && parsed.first_prompt.is_none() {
+                    parsed.first_prompt = crate::titles::clean_title(&text);
+                }
                 if let Some(index) = seen.get(&identity) {
                     parsed.messages[*index] = text;
                 } else {
@@ -161,6 +209,9 @@ fn parse_codex(event: &Value, parsed: &mut Parsed, seen: &mut HashMap<String, us
                 "output_text"
             },
         ) {
+            if role == "user" && parsed.first_prompt.is_none() {
+                parsed.first_prompt = crate::titles::clean_title(&text);
+            }
             parsed.messages.push(text);
         }
     }

@@ -289,6 +289,7 @@ mod tests {
         )))
         .unwrap();
         assert_eq!(snapshot.boot_id, "boot-v1");
+        assert_eq!(snapshot.workspaces[0].project_path, None);
         assert_eq!(
             snapshot.workspaces[0].agent_status,
             crate::api::schema::AgentStatus::Unknown

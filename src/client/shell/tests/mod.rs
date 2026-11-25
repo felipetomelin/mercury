@@ -31,6 +31,7 @@ pub(super) fn snapshot() -> ClientShellSnapshot {
             workspace_id: "ws_1".into(),
             active_tab_id: "tab_1".into(),
             new_workspace_cwd: "/repo".into(),
+            project_path: Some("/repo".into()),
             number: 1,
             label: "client-shell".into(),
             custom_label: false,

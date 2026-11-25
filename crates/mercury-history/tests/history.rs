@@ -262,3 +262,286 @@ fn rejects_database_symlink_even_when_broken() {
     symlink(temp.0.join("missing"), private.join("index.sqlite")).unwrap();
     assert!(HistoryIndex::open(&private.join("index.sqlite")).is_err());
 }
+
+#[test]
+fn readable_titles_use_provider_metadata_and_first_user_prompt() {
+    let temp = Temp::new();
+    temp.file("claude/projects/-p/named.jsonl", concat!(
+        "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Initial user question\"}}\n",
+        "{\"type\":\"custom-title\",\"sessionId\":\"named\",\"customTitle\":\"CI/CD – revisão 🚀\\n deploy\"}\n",
+        "{\"type\":\"custom-title\",\"sessionId\":\"another-session\",\"customTitle\":\"Wrong name\"}\n",
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"needle-response\"}}\n"
+    ));
+    temp.file("claude/projects/-p/fallback.jsonl", concat!(
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"Not the user prompt\"}}\n",
+        "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"First user prompt\"}}\n"
+    ));
+    temp.file(
+        "claude/projects/-p/sessions-index.json",
+        r#"{"entries":[{"sessionId":"named","summary":"Old generated summary"}]}"#,
+    );
+    let mut index = HistoryIndex::open(&temp.db()).unwrap();
+    index.sync(&temp.claude(), &temp.codex()).unwrap();
+    let hits = search(&index, "");
+    assert_eq!(
+        hits.iter()
+            .find(|hit| hit.session_id == "named")
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("CI/CD – revisão 🚀 deploy")
+    );
+    assert_eq!(
+        hits.iter()
+            .find(|hit| hit.session_id == "fallback")
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("First user prompt")
+    );
+    let matched = search(&index, "needle-response");
+    assert_eq!(
+        matched[0].title.as_deref(),
+        Some("CI/CD – revisão 🚀 deploy")
+    );
+    assert!(matched[0].snippet.contains("needle-response"));
+}
+
+#[test]
+fn codex_rename_refreshes_without_changing_transcript_and_mercury_name_survives_restart() {
+    let temp = Temp::new();
+    temp.file("codex/sessions/2020/01/01/rollout-session.jsonl", concat!(
+        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"session\",\"cwd\":\"/project\"}}\n",
+        "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"First Codex prompt\"}]}}\n"
+    ));
+    temp.file("claude/projects/-p/session.jsonl", "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Other provider prompt\"}}\n");
+    let mut index = HistoryIndex::open(&temp.db()).unwrap();
+    index.sync(&temp.claude(), &temp.codex()).unwrap();
+    assert_eq!(
+        search(&index, "")
+            .iter()
+            .find(|h| h.provider == Provider::Codex)
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("First Codex prompt")
+    );
+    let names = temp.file(
+        "codex/session_index.jsonl",
+        "{\"id\":\"session\",\"thread_name\":\"Old Codex name\"}\n{partial\n",
+    );
+    index.sync(&temp.claude(), &temp.codex()).unwrap();
+    assert_eq!(
+        search(&index, "")
+            .iter()
+            .find(|h| h.provider == Provider::Codex)
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Old Codex name")
+    );
+    fs::write(names, "{\"id\":\"session\",\"thread_name\":\"Old Codex name\"}\n{\"id\":\"session\",\"thread_name\":\"Renamed 🚀\"}\n").unwrap();
+    index.sync(&temp.claude(), &temp.codex()).unwrap();
+    assert_eq!(
+        search(&index, "")
+            .iter()
+            .find(|h| h.provider == Provider::Codex)
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Renamed 🚀")
+    );
+    index
+        .record_titles(&[mercury_history::SessionTitle {
+            provider: Provider::Codex,
+            session_id: "session".into(),
+            title: "My Mercury title".into(),
+        }])
+        .unwrap();
+    drop(index);
+    let mut index = HistoryIndex::open(&temp.db()).unwrap();
+    index.sync(&temp.claude(), &temp.codex()).unwrap();
+    let hits = search(&index, "");
+    assert_eq!(
+        hits.iter()
+            .find(|h| h.provider == Provider::Codex)
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("My Mercury title")
+    );
+    assert_eq!(
+        hits.iter()
+            .find(|h| h.provider == Provider::Claude)
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Other provider prompt")
+    );
+}
+
+#[test]
+fn migrates_legacy_index_and_backfills_unchanged_transcripts_without_losing_search() {
+    let temp = Temp::new();
+    temp.file("claude/projects/-p/session.jsonl", "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Legacy searchable prompt\"}}\n");
+    let mut index = HistoryIndex::open(&temp.db()).unwrap();
+    index.sync(&temp.claude(), &temp.codex()).unwrap();
+    drop(index);
+    let db = rusqlite::Connection::open(temp.db()).unwrap();
+    // Model the schema that shipped before titles existed, retaining file mtimes.
+    db.execute_batch("BEGIN;
+        CREATE TABLE legacy (path TEXT PRIMARY KEY, provider TEXT NOT NULL, session_id TEXT NOT NULL,
+            cwd TEXT, timestamp TEXT NOT NULL, size INTEGER NOT NULL, modified_ns INTEGER NOT NULL);
+        INSERT INTO legacy SELECT path, provider, session_id, cwd, timestamp, size, modified_ns FROM sessions;
+        DROP TABLE sessions; ALTER TABLE legacy RENAME TO sessions;
+        DROP TABLE session_titles; COMMIT;").unwrap();
+    drop(db);
+    let mut index = HistoryIndex::open(&temp.db()).unwrap();
+    assert_eq!(search(&index, "searchable").len(), 1);
+    index.sync(&temp.claude(), &temp.codex()).unwrap();
+    assert_eq!(
+        search(&index, "searchable")[0].title.as_deref(),
+        Some("Legacy searchable prompt")
+    );
+    drop(index);
+    let index = HistoryIndex::open(&temp.db()).unwrap();
+    assert_eq!(
+        search(&index, "searchable")[0].title.as_deref(),
+        Some("Legacy searchable prompt")
+    );
+}
+
+#[test]
+fn claude_index_supplies_summary_when_transcript_has_no_custom_title() {
+    let temp = Temp::new();
+    temp.file(
+        "claude/projects/-p/session.jsonl",
+        "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"First prompt\"}}\n",
+    );
+    temp.file(
+        "claude/projects/-p/sessions-index.json",
+        r#"{"entries":[{"sessionId":"session","summary":"Generated conversation title"}]}"#,
+    );
+    let mut index = HistoryIndex::open(&temp.db()).unwrap();
+    index.sync(&temp.claude(), &temp.codex()).unwrap();
+    assert_eq!(
+        search(&index, "")[0].title.as_deref(),
+        Some("Generated conversation title")
+    );
+}
+
+#[test]
+fn only_main_agents_are_listed_or_searchable_regardless_of_subagent_role_or_title() {
+    let temp = Temp::new();
+    let project = temp.0.to_string_lossy();
+    for (id, source) in [
+        (
+            "guardian",
+            serde_json::json!({"subagent":{"other":"guardian"}}),
+        ),
+        (
+            "worker",
+            serde_json::json!({"subagent":{"thread_spawn":{"parent_thread_id":"parent","depth":1}}}),
+        ),
+        ("review", serde_json::json!("subagent_review")),
+        ("legacy-worker", serde_json::json!("subagent")),
+        ("cli", serde_json::json!("cli")),
+        ("legacy-main", serde_json::Value::Null),
+    ] {
+        let meta = serde_json::json!({"type":"session_meta","payload":{"id":id,"cwd":project,"source":source,"title":"Guardian review"}});
+        let message = serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"needle"}]}});
+        temp.file(
+            &format!("codex/sessions/2026/11/18/rollout-{id}.jsonl"),
+            &format!("{meta}\n{message}\n"),
+        );
+    }
+    let mut index = HistoryIndex::open(&temp.db()).unwrap();
+    index.sync(&temp.claude(), &temp.codex()).unwrap();
+    for query in ["", "needle"] {
+        let hits = search(&index, query);
+        assert_eq!(hits.len(), 2);
+        assert!(hits
+            .iter()
+            .all(|hit| matches!(hit.session_id.as_str(), "cli" | "legacy-main")));
+        assert!(hits
+            .iter()
+            .all(|hit| hit.title.as_deref() == Some("Guardian review")));
+    }
+    for id in ["guardian", "worker", "review", "legacy-worker"] {
+        assert!(index.resolve_resume(Provider::Codex, id).unwrap().is_none());
+    }
+    assert!(index
+        .resolve_resume(Provider::Codex, "cli")
+        .unwrap()
+        .is_some());
+}
+
+#[test]
+fn main_session_limit_is_applied_after_subagent_filter() {
+    let temp = Temp::new();
+    for (id, source, timestamp) in [
+        (
+            "internal",
+            serde_json::json!({"subagent":"compact"}),
+            "2026-11-18",
+        ),
+        ("main", serde_json::json!("cli"), "2020-01-01"),
+    ] {
+        let meta = serde_json::json!({"type":"session_meta","timestamp":timestamp,"payload":{"id":id,"source":source}});
+        let message = serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":"needle"}});
+        temp.file(
+            &format!("codex/sessions/2026/11/18/rollout-{id}.jsonl"),
+            &format!("{meta}\n{message}\n"),
+        );
+    }
+    let mut index = HistoryIndex::open(&temp.db()).unwrap();
+    index.sync(&temp.claude(), &temp.codex()).unwrap();
+    for query in ["", "needle"] {
+        let hits = index
+            .search(SearchFilter {
+                query,
+                limit: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "main");
+    }
+}
+
+#[test]
+fn claude_sidechain_sessions_are_hidden_without_hiding_main_transcripts_with_sidechain_records() {
+    let temp = Temp::new();
+    let side = "{\"type\":\"user\",\"isSidechain\":true,\"message\":{\"role\":\"user\",\"content\":\"internal\"}}\n";
+    let main = "{\"type\":\"user\",\"isSidechain\":false,\"message\":{\"role\":\"user\",\"content\":\"main needle\"}}\n";
+    temp.file("claude/projects/-p/agent-side.jsonl", side);
+    temp.file("claude/projects/-p/main.jsonl", &format!("{side}{main}"));
+    let mut index = HistoryIndex::open(&temp.db()).unwrap();
+    index.sync(&temp.claude(), &temp.codex()).unwrap();
+    let hits = search(&index, "");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].session_id, "main");
+    assert_eq!(search(&index, "needle").len(), 1);
+    assert!(temp.claude().join("projects/-p/agent-side.jsonl").exists());
+}
+
+#[test]
+fn classification_migration_rechecks_unchanged_transcripts_in_existing_title_index() {
+    let temp = Temp::new();
+    let body = "{\"type\":\"session_meta\",\"payload\":{\"id\":\"worker\",\"source\":{\"subagent\":\"review\"}}}\n";
+    temp.file("codex/sessions/2026/11/18/rollout-worker.jsonl", body);
+    let mut index = HistoryIndex::open(&temp.db()).unwrap();
+    index.sync(&temp.claude(), &temp.codex()).unwrap();
+    drop(index);
+    let db = rusqlite::Connection::open(temp.db()).unwrap();
+    db.execute_batch("ALTER TABLE sessions DROP COLUMN is_subagent;")
+        .unwrap();
+    drop(db);
+    let mut index = HistoryIndex::open(&temp.db()).unwrap();
+    index.sync(&temp.claude(), &temp.codex()).unwrap();
+    assert!(search(&index, "").is_empty());
+    assert!(temp
+        .codex()
+        .join("sessions/2026/11/18/rollout-worker.jsonl")
+        .exists());
+}

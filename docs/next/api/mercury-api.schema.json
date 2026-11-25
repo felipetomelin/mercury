@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "protocol": 22,
+  "protocol": 23,
   "schema_version": 1,
   "schemas": {
     "error_response": {
@@ -8708,6 +8708,12 @@
             },
             "timestamp": {
               "type": "string"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [

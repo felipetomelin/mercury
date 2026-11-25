@@ -15,6 +15,8 @@ pub(super) struct AgentRow {
     pub(super) status: crate::api::schema::AgentStatus,
     pub(super) focused: bool,
     pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
+    pub(super) project_path: Option<String>,
+    pub(super) project_color: ratatui::style::Color,
 }
 
 pub(super) fn ordered_agent_pane_ids(
@@ -56,6 +58,7 @@ pub(super) fn render_agent_panel(
     config: &ClientShellConfig,
     agent_scroll: &mut usize,
     hits: &mut ShellHitMap,
+    endpoint: &ClientEndpointId,
 ) {
     if !render_agent_panel_header(
         buffer,
@@ -67,7 +70,11 @@ pub(super) fn render_agent_panel(
         return;
     }
 
-    let rows = agent_rows(snapshot, config, None);
+    let mut rows = agent_rows(snapshot, config, None);
+    for row in &mut rows {
+        row.project_color =
+            super::project_color::color(row.project_path.as_deref(), endpoint, &config.palette);
+    }
     render_agent_list(
         buffer,
         area,
@@ -316,6 +323,12 @@ pub(super) fn agent_row(
         status: agent.agent_status,
         focused: agent.focused,
         rows,
+        project_path: workspace.project_path.clone(),
+        project_color: super::project_color::color(
+            workspace.project_path.as_deref(),
+            &ClientEndpointId::Local,
+            &config.palette,
+        ),
     })
 }
 
@@ -371,6 +384,9 @@ pub(super) fn render_agent_row(
             Rect::new(rect.x, rect.y + index as u16, rect.width, 1),
             buffer,
         );
+    }
+    if !rect.is_empty() {
+        super::project_color::marker(buffer, rect.x, rect.y, row.project_color);
     }
 }
 

@@ -309,6 +309,7 @@ pub(super) fn render_shell(
                     .selected_workspace_id
                     .map(|target| target.workspace_id.as_str()),
                 &mut hits,
+                state.active_endpoint_id,
             );
         } else {
             render_sidebar(

@@ -55,6 +55,17 @@ impl SessionWriter {
         if let Err(err) = super::io::save_history_to_path(&history_path, history) {
             crate::logging::session_save_failed(&history_path, &err.to_string());
         }
+        let titles = snapshot.history_titles();
+        if !titles.is_empty() {
+            // Same background writer as the session checkpoint; never on the render path.
+            let result = mercury_history::HistoryIndex::open(
+                &self.path.with_file_name("history").join("index.sqlite"),
+            )
+            .and_then(|mut index| index.record_titles(&titles));
+            if let Err(err) = result {
+                tracing::warn!(error = ?err, "failed to preserve conversation titles");
+            }
+        }
         crate::logging::session_saved(&self.path, snapshot.workspaces.len());
     }
 
@@ -313,6 +324,49 @@ mod tests {
 
     fn snapshots(writer: &SessionWriter) -> Vec<(u128, PathBuf)> {
         recovery_files(&writer.path.with_file_name("session-snapshots")).unwrap()
+    }
+
+    #[test]
+    fn manual_conversation_title_survives_clearing_the_session_layout() {
+        let mut writer = writer(false);
+        let mut snapshot = snapshot();
+        let pane = snapshot.workspaces[0].tabs[0]
+            .panes
+            .values_mut()
+            .next()
+            .unwrap();
+        pane.label = Some("CI/CD".into());
+        pane.agent_session = Some(super::super::snapshot::PaneAgentSessionSnapshot {
+            source: "mercury:claude".into(),
+            agent: "claude".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: "session".into(),
+        });
+        writer.save(&snapshot, None);
+        writer.clear();
+        let home = writer.path.with_file_name("claude");
+        std::fs::create_dir_all(home.join("projects/-p")).unwrap();
+        std::fs::write(
+            home.join("projects/-p/session.jsonl"),
+            r#"{"type":"user","message":{"role":"user","content":"Original question"}}"#,
+        )
+        .unwrap();
+        let mut index = mercury_history::HistoryIndex::open(
+            &writer.path.with_file_name("history").join("index.sqlite"),
+        )
+        .unwrap();
+        index
+            .sync(&home, &writer.path.with_file_name("codex"))
+            .unwrap();
+        let hits = index
+            .search(mercury_history::SearchFilter {
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(hits[0].title.as_deref(), Some("CI/CD"));
+        drop(index);
+        std::fs::remove_dir_all(writer.path.parent().unwrap()).unwrap();
     }
 
     #[test]

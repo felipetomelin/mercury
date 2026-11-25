@@ -41,6 +41,7 @@ pub(super) fn render_history_view(
     config: &ClientShellConfig,
     state: &mut HistoryViewState,
     hits: &mut ShellHitMap,
+    endpoint: &ClientEndpointId,
 ) {
     hits.history_rows.clear();
     if area.is_empty() {
@@ -157,15 +158,38 @@ pub(super) fn render_history_view(
         buffer.set_style(row, style);
         let project = hit.cwd.as_deref().unwrap_or("?");
         let date = hit.timestamp.get(..10).unwrap_or(&hit.timestamp);
-        let line = format!(
-            "{}  {}  {}  {}  {}",
-            hit.provider, date, hit.snippet, project, hit.session_id
-        );
+        let title = hit
+            .title
+            .as_deref()
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or("Conversa sem título");
+        let title_width = if state.query.is_empty() {
+            row.width.saturating_sub(28).clamp(16, 60)
+        } else {
+            (row.width / 3).clamp(12, 40)
+        };
+        let title = crate::ui::truncate_end(title, title_width as usize);
+        let line = if state.query.is_empty() || hit.snippet.is_empty() {
+            format!("{title}  · {}  {date}  {project}", hit.provider)
+        } else {
+            format!(
+                "{title}  · {}  · {}  {date}  {project}",
+                hit.snippet, hit.provider
+            )
+        };
+        if row.width > 1 {
+            super::project_color::marker(
+                buffer,
+                row.x + 1,
+                y,
+                super::project_color::color(hit.cwd.as_deref(), endpoint, palette),
+            );
+        }
         put_text(
             buffer,
-            row.x.saturating_add(1),
+            row.x.saturating_add(3),
             y,
-            row.width.saturating_sub(1),
+            row.width.saturating_sub(3),
             &line,
             style,
         );

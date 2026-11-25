@@ -126,6 +126,7 @@ fn history_contract_round_trips_with_bounded_result_shape() {
                 cwd: Some("/project".into()),
                 timestamp: "2020-01-01".into(),
                 snippet: "old task".into(),
+                title: Some("CI/CD".into()),
             }],
         },
     };
@@ -1842,4 +1843,12 @@ fn pane_link_resolve_round_trips() {
         serde_json::from_value::<ResponseResult>(json).unwrap(),
         result
     );
+}
+
+#[test]
+fn history_hit_without_title_remains_backwards_compatible() {
+    let hit: HistoryHitInfo = serde_json::from_value(serde_json::json!({
+        "provider": "codex", "session_id": "session-1", "timestamp": "2020-01-01", "snippet": "legacy"
+    })).unwrap();
+    assert!(hit.title.is_none());
 }

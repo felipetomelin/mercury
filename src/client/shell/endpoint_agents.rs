@@ -37,6 +37,9 @@ pub(super) fn render_collapsed(
                     Modifier::empty()
                 }),
         );
+        if rect.width > 2 {
+            super::project_color::marker(buffer, rect.x + 2, rect.y, row.agent.project_color);
+        }
         hits.endpoint_agents
             .push((rect, row.endpoint_id, row.agent.pane_id));
     }
@@ -166,6 +169,11 @@ fn agent_rows(
         let key = (row.endpoint.endpoint_id.clone(), row.agent.pane_id.clone());
         let mut agent = rendered_rows.remove(&key)?;
         agent.focused &= row.endpoint.endpoint_id == active_endpoint_id;
+        agent.project_color = super::project_color::color(
+            agent.project_path.as_deref(),
+            row.endpoint.endpoint_id,
+            &config.palette,
+        );
         Some(EndpointAgentRow {
             endpoint_id: row.endpoint.endpoint_id.clone(),
             machine_label: row.endpoint.label.to_owned(),

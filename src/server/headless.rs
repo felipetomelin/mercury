@@ -2986,7 +2986,29 @@ impl HeadlessServer {
             &msg.request.method,
             api::schema::Method::HistorySearch(_) | api::schema::Method::HistoryResolve(_)
         ) {
-            history::dispatch(msg.request, msg.respond_to);
+            let titles = self
+                .app
+                .state
+                .terminals
+                .values()
+                .filter_map(|terminal| {
+                    let session = terminal.persisted_agent_session.as_ref()?;
+                    if session.session_ref.kind != crate::agent_resume::AgentSessionRefKind::Id {
+                        return None;
+                    }
+                    let provider = match session.agent.as_str() {
+                        "claude" => mercury_history::Provider::Claude,
+                        "codex" => mercury_history::Provider::Codex,
+                        _ => return None,
+                    };
+                    Some(mercury_history::SessionTitle {
+                        provider,
+                        session_id: session.session_ref.value.clone(),
+                        title: terminal.manual_label.clone()?,
+                    })
+                })
+                .collect();
+            history::dispatch(msg.request, msg.respond_to, titles);
             return changed;
         }
         if matches!(

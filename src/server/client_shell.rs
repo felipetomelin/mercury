@@ -81,6 +81,7 @@ pub(super) fn snapshot_with_completions(
                     .resolved_new_workspace_cwd_from_tab(workspace_index, active_tab_index)
                     .display()
                     .to_string(),
+                project_path: Some(state.identity_cwd.display().to_string()),
                 number: workspace.number,
                 label: workspace.label,
                 custom_label: state.custom_name.is_some(),
@@ -166,7 +167,7 @@ pub(super) fn snapshot_with_completions(
                         .get(workspace_index)?
                         .pane_state(pane_id)
                 })
-                .and_then(|pane| app.usage.agent_usage_wire(&pane.attached_terminal_id));
+                .and_then(|pane| app.current_agent_usage_wire(&pane.attached_terminal_id));
             protocol::ClientShellAgent {
                 pane_id,
                 workspace_id: agent.workspace_id,

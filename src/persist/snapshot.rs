@@ -514,6 +514,33 @@ pub(super) fn snapshot_file_version(content: &str) -> Option<u32> {
         .map(|header| header.version)
 }
 
+impl SessionSnapshot {
+    /// Only manual pane names tied to an explicit provider session are durable titles.
+    pub(crate) fn history_titles(&self) -> Vec<mercury_history::SessionTitle> {
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.tabs)
+            .flat_map(|tab| tab.panes.values())
+            .filter_map(|pane| {
+                let session = pane.agent_session.as_ref()?;
+                if session.kind != crate::agent_resume::AgentSessionRefKind::Id {
+                    return None;
+                }
+                let provider = match session.agent.as_str() {
+                    "claude" => mercury_history::Provider::Claude,
+                    "codex" => mercury_history::Provider::Codex,
+                    _ => return None,
+                };
+                Some(mercury_history::SessionTitle {
+                    provider,
+                    session_id: session.value.clone(),
+                    title: pane.label.clone()?,
+                })
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

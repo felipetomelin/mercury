@@ -20,6 +20,18 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde_json::{json, Value};
 
+// Running these tests inside Mercury must not import the caller's pane/startup context.
+const INHERITED_CONTEXT: &[&str] = &[
+    "MERCURY_ENV",
+    "MERCURY_PANE_ID",
+    "MERCURY_TAB_ID",
+    "MERCURY_WORKSPACE_ID",
+    "MERCURY_STARTUP_CWD",
+    "MERCURY_SESSION",
+    "MERCURY_CLIENT_SOCKET_PATH",
+    "MERCURY_BIN_PATH",
+];
+
 static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture {
@@ -81,6 +93,9 @@ impl Fixture {
 
     fn env_command(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_mercury"));
+        for key in INHERITED_CONTEXT {
+            command.env_remove(key);
+        }
         command
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("XDG_RUNTIME_DIR", self.root.join("runtime"))
@@ -112,6 +127,22 @@ impl Fixture {
             "payload":{"type":"message","role":"user",
                 "content":[{"type":"input_text","text":"fixture-needle"}]}});
         fs::write(transcript, format!("{line}\n{message}\n")).unwrap();
+        fs::write(
+            self.root.join("codex/session_index.jsonl"),
+            "{\"id\":\"fixture-codex\",\"thread_name\":\"CI/CD fixture\"}\n",
+        )
+        .unwrap();
+
+        for role in ["guardian", "worker"] {
+            let meta = json!({"timestamp":"2026-11-18T12:00:00Z","type":"session_meta",
+                "payload":{"id":format!("fixture-{role}"),"cwd":project,"source":{"subagent":{"other":role}},"title":"Internal session"}});
+            fs::write(
+                self.root
+                    .join(format!("codex/sessions/2024/01/02/rollout-{role}.jsonl")),
+                format!("{meta}\n{message}\n"),
+            )
+            .unwrap();
+        }
 
         let mock_bin = self.root.join("bin");
         fs::create_dir(&mock_bin).unwrap();
@@ -132,6 +163,9 @@ impl Fixture {
             })
             .unwrap();
         let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_mercury"));
+        for key in INHERITED_CONTEXT {
+            command.env_remove(key);
+        }
         command.arg("server");
         command.env("XDG_CONFIG_HOME", self.root.join("config"));
         command.env("XDG_RUNTIME_DIR", self.root.join("runtime"));
@@ -167,6 +201,9 @@ impl Fixture {
             })
             .unwrap();
         let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_mercury"));
+        for key in INHERITED_CONTEXT {
+            command.env_remove(key);
+        }
         command.arg("client");
         command.env("XDG_CONFIG_HOME", self.root.join("config"));
         command.env("XDG_RUNTIME_DIR", self.root.join("runtime"));
@@ -321,6 +358,8 @@ fn search_and_open_resume_in_new_pane_without_real_provider() {
     );
     let found: Value = serde_json::from_slice(&search.stdout).unwrap();
     assert_eq!(found["result"]["hits"][0]["session_id"], "fixture-codex");
+    assert_eq!(found["result"]["hits"][0]["title"], "CI/CD fixture");
+    assert_eq!(found["result"]["hits"].as_array().unwrap().len(), 1);
     let created = request(
         &fixture.socket(),
         json!({"id":"workspace","method":"workspace.create",

@@ -33,6 +33,7 @@ mod notification_policy;
 mod notifications;
 mod overlay_input;
 mod preferences;
+mod project_color;
 mod render;
 mod scroll;
 mod settings;

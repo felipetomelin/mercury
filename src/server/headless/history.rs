@@ -13,7 +13,11 @@ const MAX_PENDING: usize = 8;
 static PENDING: AtomicUsize = AtomicUsize::new(0);
 static SERIAL: OnceLock<Mutex<()>> = OnceLock::new();
 
-pub(super) fn dispatch(request: Request, respond_to: mpsc::Sender<String>) {
+pub(super) fn dispatch(
+    request: Request,
+    respond_to: mpsc::Sender<String>,
+    titles: Vec<mercury_history::SessionTitle>,
+) {
     if PENDING.fetch_add(1, Ordering::AcqRel) >= MAX_PENDING {
         PENDING.fetch_sub(1, Ordering::AcqRel);
         let _ = respond_to.send(error(
@@ -32,7 +36,7 @@ pub(super) fn dispatch(request: Request, respond_to: mpsc::Sender<String>) {
         }
         let _pending = PendingGuard;
         let response = match SERIAL.get_or_init(|| Mutex::new(())).lock() {
-            Ok(_guard) => handle(request),
+            Ok(_guard) => handle_with_titles(request, &titles),
             Err(_) => error(
                 request.id,
                 "history_unavailable",
@@ -77,7 +81,12 @@ fn validate_date(value: &str) -> bool {
     year > 0 && day > 0 && day <= days
 }
 
+#[cfg(test)]
 fn handle(request: Request) -> String {
+    handle_with_titles(request, &[])
+}
+
+fn handle_with_titles(request: Request, titles: &[mercury_history::SessionTitle]) -> String {
     let id = request.id;
     let method = request.method;
     if let Method::HistorySearch(params) = &method {
@@ -141,7 +150,11 @@ fn handle(request: Request) -> String {
         Ok(index) => index,
         Err(_) => return error(id, "history_unavailable", "history index is unavailable"),
     };
-    if index.sync(&claude_home, &codex_home).is_err() {
+    if index
+        .record_titles(titles)
+        .and_then(|()| index.sync(&claude_home, &codex_home))
+        .is_err()
+    {
         return error(id, "history_unavailable", "history scan failed");
     }
     let result = match method {
@@ -164,6 +177,7 @@ fn handle(request: Request) -> String {
                             cwd: hit.cwd,
                             timestamp: hit.timestamp,
                             snippet: hit.snippet,
+                            title: hit.title,
                         })
                         .collect(),
                 },

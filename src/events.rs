@@ -80,6 +80,9 @@ pub(crate) struct WorktreeReadData {
 #[derive(Debug, Clone)]
 pub struct TerminalUsageUpdate {
     pub terminal_id: crate::terminal::TerminalId,
+    /// Identity captured before the background read, including failed reads.
+    pub provider: mercury_usage::Provider,
+    pub session_id: String,
     pub usage: Option<mercury_usage::SessionUsage>,
 }
 

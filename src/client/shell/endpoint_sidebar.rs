@@ -186,6 +186,18 @@ pub(super) fn render_collapsed(
                     })
                     .add_modifier(dim),
             );
+            if !rect.is_empty() {
+                super::project_color::marker(
+                    buffer,
+                    rect.x,
+                    rect.y,
+                    super::project_color::color(
+                        workspace.project_path.as_deref(),
+                        &endpoint.endpoint_id,
+                        palette,
+                    ),
+                );
+            }
             hits.workspaces.push(WorkspaceHit {
                 rect,
                 endpoint_id: endpoint.endpoint_id.clone(),
@@ -480,6 +492,16 @@ pub(super) fn render_expanded(
                     state.selected_workspace_id.is_some(),
                     false,
                     palette,
+                );
+                super::project_color::workspace_marker(
+                    buffer,
+                    nested,
+                    entry.indented,
+                    super::project_color::color(
+                        workspace.project_path.as_deref(),
+                        &endpoint.endpoint_id,
+                        palette,
+                    ),
                 );
                 if endpoint.status != ClientEndpointStatus::Online {
                     buffer.set_style(

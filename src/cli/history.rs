@@ -101,7 +101,11 @@ fn search(args: &[String]) -> io::Result<i32> {
             let date = hit["timestamp"].as_str().unwrap_or("?");
             let cwd = hit["cwd"].as_str().unwrap_or("?");
             let snippet = hit["snippet"].as_str().unwrap_or("");
-            println!("{provider} {session}  {date}  {cwd}\n  {snippet}");
+            let title = hit["title"]
+                .as_str()
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or("Conversa sem título");
+            println!("{title}  · {provider}  {date}  {cwd}\n  {session}  {snippet}");
         }
         if hits.is_empty() {
             println!("Nenhuma conversa encontrada");

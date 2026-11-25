@@ -778,6 +778,19 @@ fn tracked_session_for(terminal: &TerminalState) -> Option<TrackedSession> {
 }
 
 impl App {
+    /// Never expose a previous session's cached context after a chat changes.
+    pub(crate) fn current_agent_usage_wire(
+        &self,
+        terminal_id: &TerminalId,
+    ) -> Option<protocol::ClientShellAgentUsage> {
+        let tracked = tracked_session_for(self.state.terminals.get(terminal_id)?)?;
+        let usage = self.usage.sessions.get(terminal_id)?;
+        if usage.provider.as_str() != tracked.agent || usage.session_id != tracked.session_id {
+            return None;
+        }
+        self.usage.agent_usage_wire(terminal_id)
+    }
+
     /// Rebuilds historical token records once per enabled server lifetime.
     /// The scan is deliberately off-thread; only its in-memory result reaches
     /// the snapshot/render path.
@@ -925,6 +938,23 @@ impl App {
                 continue;
             };
             live.insert(terminal_id.clone());
+            if self.usage.sessions.get(terminal_id).is_some_and(|usage| {
+                usage.provider.as_str() != tracked.agent || usage.session_id != tracked.session_id
+            }) {
+                self.usage.sessions.remove(terminal_id);
+                self.usage.last_applied_at.remove(terminal_id);
+                self.usage.next_poll_at.remove(terminal_id);
+            }
+            if self
+                .usage
+                .statuslines
+                .get(terminal_id)
+                .is_some_and(|snapshot| {
+                    tracked.agent != "claude" || snapshot.session_id != tracked.session_id
+                })
+            {
+                self.usage.statuslines.remove(terminal_id);
+            }
             let interval = self.usage.poll_interval(terminal.state);
             let deadline = *self
                 .usage
@@ -1014,16 +1044,13 @@ impl App {
                 .terminals
                 .get(&update.terminal_id)
                 .and_then(tracked_session_for);
-            let belongs_to_current = match (&current, &update.usage) {
-                (Some(tracked), Some(usage)) => {
-                    (tracked.agent == "claude" && usage.provider == Provider::Claude)
-                        || (tracked.agent == "codex"
-                            && usage.provider == Provider::Codex
-                            && tracked.session_id == usage.session_id)
-                }
-                (_, None) => true,
-                _ => false,
-            };
+            let belongs_to_current = current.as_ref().is_some_and(|tracked| {
+                tracked.agent == update.provider.as_str()
+                    && tracked.session_id == update.session_id
+                    && update.usage.as_ref().is_none_or(|usage| {
+                        usage.provider == update.provider && usage.session_id == update.session_id
+                    })
+            });
             if !belongs_to_current {
                 continue;
             }
@@ -1455,7 +1482,16 @@ fn refresh_usage_targets(
             }
             _ => None,
         };
-        sessions.push(TerminalUsageUpdate { terminal_id, usage });
+        sessions.push(TerminalUsageUpdate {
+            terminal_id,
+            provider: if tracked.agent == "claude" {
+                Provider::Claude
+            } else {
+                Provider::Codex
+            },
+            session_id: tracked.session_id,
+            usage,
+        });
     }
     (sessions, limits)
 }
@@ -1591,9 +1627,9 @@ mod tests {
         path
     }
 
-    fn claude_line(request: &str, output_tokens: u64, timestamp: &str) -> String {
+    fn claude_line(session_id: &str, request: &str, output_tokens: u64, timestamp: &str) -> String {
         format!(
-            r#"{{"type":"assistant","sessionId":"sess","requestId":"{request}","timestamp":"{timestamp}","message":{{"id":"{request}","model":"claude-sonnet-5","usage":{{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":{output_tokens}}}}}}}"#
+            r#"{{"type":"assistant","sessionId":"{session_id}","requestId":"{request}","timestamp":"{timestamp}","message":{{"id":"{request}","model":"claude-sonnet-5","usage":{{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":{output_tokens}}}}}}}"#
         )
     }
 
@@ -1638,6 +1674,155 @@ mod tests {
     }
 
     #[test]
+    fn context_updates_remain_isolated_between_chats_for_both_providers() {
+        for provider in [Provider::Claude, Provider::Codex] {
+            let (mut app, first) = app_with_codex_pane("chat-a");
+            let second = TerminalId::alloc();
+            let mut terminal = TerminalState::new(second.clone(), PathBuf::from("/tmp"));
+            terminal.persisted_agent_session = Some(PersistedAgentSession {
+                source: format!("mercury:{}", provider.as_str()),
+                agent: provider.as_str().into(),
+                session_ref: AgentSessionRef::id("chat-b").unwrap(),
+            });
+            app.state.terminals.insert(second.clone(), terminal);
+            app.state
+                .terminals
+                .get_mut(&first)
+                .unwrap()
+                .persisted_agent_session
+                .as_mut()
+                .unwrap()
+                .agent = provider.as_str().into();
+            let usage = |session: &str, tokens| mercury_usage::SessionUsage {
+                provider,
+                session_id: session.into(),
+                model: None,
+                totals: mercury_usage::TokenCounts::default(),
+                context: Some(mercury_usage::ContextUsage {
+                    used_tokens: tokens,
+                    window_tokens: Some(200_000),
+                    exact: true,
+                }),
+                cost_usd: None,
+                updated_at: None,
+            };
+            app.usage
+                .sessions
+                .insert(first.clone(), usage("chat-a", 1_000));
+            app.usage
+                .sessions
+                .insert(second.clone(), usage("chat-b", 2_000));
+            let before = app.current_agent_usage_wire(&first).unwrap();
+            assert!(app.apply_usage_refreshed(
+                vec![TerminalUsageUpdate {
+                    terminal_id: second.clone(),
+                    provider,
+                    session_id: "chat-b".into(),
+                    usage: Some(usage("chat-b", 10_000)),
+                }],
+                vec![]
+            ));
+            assert_eq!(app.current_agent_usage_wire(&first).unwrap(), before);
+            assert_eq!(
+                app.current_agent_usage_wire(&second)
+                    .unwrap()
+                    .context_permille,
+                Some(50)
+            );
+            // A misrouted result with either a wrong target or wrong payload is rejected.
+            for (target, payload) in [("chat-b", "chat-b"), ("chat-a", "chat-b")] {
+                assert!(!app.apply_usage_refreshed(
+                    vec![TerminalUsageUpdate {
+                        terminal_id: first.clone(),
+                        provider,
+                        session_id: target.into(),
+                        usage: Some(usage(payload, 90_000)),
+                    }],
+                    vec![]
+                ));
+                assert_eq!(app.current_agent_usage_wire(&first).unwrap(), before);
+            }
+        }
+    }
+
+    #[test]
+    fn stale_refresh_including_missing_file_cannot_replace_or_clear_new_session() {
+        for provider in [Provider::Claude, Provider::Codex] {
+            let (mut app, terminal_id) = app_with_codex_pane("old");
+            app.state
+                .terminals
+                .get_mut(&terminal_id)
+                .unwrap()
+                .persisted_agent_session
+                .as_mut()
+                .unwrap()
+                .agent = provider.as_str().into();
+            let old = mercury_usage::SessionUsage {
+                provider,
+                session_id: "old".into(),
+                model: None,
+                totals: mercury_usage::TokenCounts::default(),
+                context: None,
+                cost_usd: None,
+                updated_at: None,
+            };
+            app.usage.sessions.insert(terminal_id.clone(), old.clone());
+            app.usage.statuslines.insert(
+                terminal_id.clone(),
+                StatuslineSnapshot::from_value(
+                    &serde_json::json!({"session_id": "old"}),
+                    OffsetDateTime::UNIX_EPOCH,
+                )
+                .unwrap(),
+            );
+            app.usage
+                .last_applied_at
+                .insert(terminal_id.clone(), Instant::now());
+            app.state
+                .terminals
+                .get_mut(&terminal_id)
+                .unwrap()
+                .persisted_agent_session
+                .as_mut()
+                .unwrap()
+                .session_ref = AgentSessionRef::id("new").unwrap();
+            assert!(app.current_agent_usage_wire(&terminal_id).is_none());
+            assert_eq!(app.usage_poll_targets_due(Instant::now()).len(), 1);
+            assert!(!app.usage.sessions.contains_key(&terminal_id));
+            assert!(!app.usage.last_applied_at.contains_key(&terminal_id));
+            assert!(!app.usage.statuslines.contains_key(&terminal_id));
+            let mut current = old.clone();
+            current.session_id = "new".into();
+            app.usage
+                .sessions
+                .insert(terminal_id.clone(), current.clone());
+            for usage in [Some(old), None] {
+                assert!(!app.apply_usage_refreshed(
+                    vec![TerminalUsageUpdate {
+                        terminal_id: terminal_id.clone(),
+                        provider,
+                        session_id: "old".into(),
+                        usage,
+                    }],
+                    vec![]
+                ));
+                assert_eq!(app.usage.sessions[&terminal_id], current);
+            }
+            // A failed read for the current session still produces n/a normally.
+            assert!(app.apply_usage_refreshed(
+                vec![TerminalUsageUpdate {
+                    terminal_id: terminal_id.clone(),
+                    provider,
+                    session_id: "new".into(),
+                    usage: None,
+                }],
+                vec![]
+            ));
+            assert!(app.current_agent_usage_wire(&terminal_id).is_none());
+        }
+    }
+
+    #[test]
     fn codex_live_cost_only_updates_matching_thread_and_survives_rollout_refresh() {
         let first = "11111111-2222-3333-4444-555555555551";
         let second = "11111111-2222-3333-4444-555555555552";
@@ -1664,6 +1849,8 @@ mod tests {
         app.apply_usage_refreshed(
             vec![TerminalUsageUpdate {
                 terminal_id: terminal_id.clone(),
+                provider: Provider::Codex,
+                session_id: first.into(),
                 usage: Some(rollout),
             }],
             Vec::new(),
@@ -1693,6 +1880,8 @@ mod tests {
         assert!(!app.apply_usage_refreshed(
             vec![TerminalUsageUpdate {
                 terminal_id: terminal_id.clone(),
+                provider: Provider::Codex,
+                session_id: first.into(),
                 usage: Some(stale),
             }],
             Vec::new(),
@@ -1876,8 +2065,8 @@ mod tests {
             session_id,
             &format!(
                 "{}\n{}\n",
-                claude_line("req_a", 10, "2026-10-05T14:00:00.000Z"),
-                claude_line("req_b", 20, "2026-10-05T14:01:00.000Z"),
+                claude_line(session_id, "req_a", 10, "2026-10-05T14:00:00.000Z"),
+                claude_line(session_id, "req_b", 20, "2026-10-05T14:01:00.000Z"),
             ),
         );
         let (mut app, terminal_id) = app_with_claude_pane(&claude_home, &cwd, session_id);
@@ -1912,7 +2101,10 @@ mod tests {
             &claude_home,
             &cwd,
             session_id,
-            &format!("{}\n", claude_line("req_a", 10, "2026-10-05T14:00:00.000Z")),
+            &format!(
+                "{}\n",
+                claude_line(session_id, "req_a", 10, "2026-10-05T14:00:00.000Z")
+            ),
         );
         let (mut app, terminal_id) = app_with_claude_pane(&claude_home, &cwd, session_id);
         app.usage
@@ -1922,6 +2114,8 @@ mod tests {
         let changed = app.apply_usage_refreshed(
             vec![TerminalUsageUpdate {
                 terminal_id: terminal_id.clone(),
+                provider: Provider::Claude,
+                session_id: session_id.into(),
                 usage: Some(mercury_usage::SessionUsage {
                     provider: Provider::Claude,
                     session_id: session_id.into(),
@@ -2045,7 +2239,10 @@ mod tests {
             &claude_home,
             &cwd,
             session_id,
-            &format!("{}\n", claude_line("req_a", 10, "2026-10-05T14:00:00.000Z")),
+            &format!(
+                "{}\n",
+                claude_line(session_id, "req_a", 10, "2026-10-05T14:00:00.000Z")
+            ),
         );
         let (mut app, terminal_id) = app_with_claude_pane(&claude_home, &cwd, session_id);
         let now = Instant::now();
@@ -2084,7 +2281,7 @@ mod tests {
             &claude_home,
             &cwd,
             session_id,
-            &format!("{}\n", claude_line("req_a", 500, &now)),
+            &format!("{}\n", claude_line(session_id, "req_a", 500, &now)),
         );
         let (mut app, terminal_id) = app_with_claude_pane(&claude_home, &cwd, session_id);
         let budget_config: mercury_usage::BudgetConfig = toml::from_str(
@@ -2136,7 +2333,10 @@ mod tests {
             &claude_home,
             &cwd,
             session_id,
-            &format!("{}\n", claude_line("req_history", 500, &now_rfc3339())),
+            &format!(
+                "{}\n",
+                claude_line(session_id, "req_history", 500, &now_rfc3339())
+            ),
         );
         let (mut app, terminal_id) = app_with_claude_pane(&claude_home, &cwd, session_id);
         let budget_config: mercury_usage::BudgetConfig = toml::from_str(

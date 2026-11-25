@@ -1,6 +1,8 @@
 //! Private, local search index for Claude Code and Codex conversations.
 
 mod parse;
+mod titles;
+pub use titles::SessionTitle;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
@@ -36,6 +38,7 @@ pub struct SearchHit {
     pub cwd: Option<String>,
     pub timestamp: String,
     pub snippet: String,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,7 +89,8 @@ impl HistoryIndex {
                 Err(error) => return Err(Error::Io(error)),
             }
         }
-        let db = Connection::open(path)?;
+        let mut db = Connection::open(path)?;
+        db.busy_timeout(std::time::Duration::from_millis(500))?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
             CREATE TABLE IF NOT EXISTS sessions (
                 path TEXT PRIMARY KEY, provider TEXT NOT NULL, session_id TEXT NOT NULL,
@@ -95,6 +99,7 @@ impl HistoryIndex {
             CREATE INDEX IF NOT EXISTS sessions_identity_newest
                 ON sessions(provider, session_id, modified_ns DESC, path DESC);
             CREATE VIRTUAL TABLE IF NOT EXISTS messages USING fts5(path UNINDEXED, body);")?;
+        titles::migrate(&mut db)?;
         if !existing_db {
             make_private_file(path)?;
         }
@@ -128,6 +133,7 @@ impl HistoryIndex {
             self.index_file(&path, Provider::Codex)?;
             seen.insert(path.to_string_lossy().into_owned());
         }
+        self.sync_provider_titles(claude_home, codex_home)?;
         // If a home is temporarily unavailable, retain its prior results.
         for (home, provider) in [
             (claude_home, Provider::Claude),
@@ -192,8 +198,8 @@ impl HistoryIndex {
         tx.execute("DELETE FROM messages WHERE path=?1", [&path_text])?;
         tx.execute("DELETE FROM sessions WHERE path=?1", [&path_text])?;
         tx.execute(
-            "INSERT INTO sessions(path, provider, session_id, cwd, timestamp, size, modified_ns)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO sessions(path, provider, session_id, cwd, timestamp, size, modified_ns, title, first_prompt, is_subagent)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 path_text,
                 provider.as_str(),
@@ -201,7 +207,10 @@ impl HistoryIndex {
                 parsed.cwd,
                 parsed.timestamp,
                 size,
-                modified_ns
+                modified_ns,
+                parsed.title,
+                parsed.first_prompt,
+                parsed.is_subagent,
             ],
         )?;
         for body in parsed.messages {
@@ -221,9 +230,12 @@ impl HistoryIndex {
         if let Some(query) = query {
             let mut statement = self.db.prepare(
                 "SELECT s.provider, s.session_id, s.cwd, s.timestamp,
-                snippet(messages, 1, '', '', ' … ', 18)
+                snippet(messages, 1, '', '', ' … ', 18),
+                coalesce(manual.title, CASE WHEN s.provider='claude' THEN s.title END, external.title, s.title, s.first_prompt)
                 FROM messages JOIN sessions s ON s.path=messages.path
-                WHERE messages MATCH ?1 AND (?2 IS NULL OR s.provider=?2)
+                LEFT JOIN session_titles manual ON manual.provider=s.provider AND manual.session_id=s.session_id AND manual.source='mercury'
+                LEFT JOIN session_titles external ON external.provider=s.provider AND external.session_id=s.session_id AND external.source='provider'
+                WHERE s.is_subagent=0 AND messages MATCH ?1 AND (?2 IS NULL OR s.provider=?2)
                 AND (?3 IS NULL OR s.cwd=?3) AND (?4 IS NULL OR substr(s.timestamp, 1, 10)>=?4)
                 AND (?5 IS NULL OR substr(s.timestamp, 1, 10)<=?5)
                 AND s.path = (SELECT newest.path FROM sessions newest
@@ -247,8 +259,12 @@ impl HistoryIndex {
             }
         } else {
             let mut statement = self.db.prepare(
-                "SELECT s.provider, s.session_id, s.cwd, s.timestamp, ''
-                FROM sessions s WHERE (?1 IS NULL OR s.provider=?1)
+                "SELECT s.provider, s.session_id, s.cwd, s.timestamp, '',
+                coalesce(manual.title, CASE WHEN s.provider='claude' THEN s.title END, external.title, s.title, s.first_prompt)
+                FROM sessions s
+                LEFT JOIN session_titles manual ON manual.provider=s.provider AND manual.session_id=s.session_id AND manual.source='mercury'
+                LEFT JOIN session_titles external ON external.provider=s.provider AND external.session_id=s.session_id AND external.source='provider'
+                WHERE s.is_subagent=0 AND (?1 IS NULL OR s.provider=?1)
                 AND (?2 IS NULL OR s.cwd=?2) AND (?3 IS NULL OR substr(s.timestamp, 1, 10)>=?3)
                 AND (?4 IS NULL OR substr(s.timestamp, 1, 10)<=?4)
                 AND s.path = (SELECT newest.path FROM sessions newest
@@ -294,7 +310,7 @@ impl HistoryIndex {
         let candidate: Option<(String, Option<String>)> = self
             .db
             .query_row(
-                "SELECT path, cwd FROM sessions WHERE provider=?1 AND session_id=?2 ORDER BY modified_ns DESC, path DESC LIMIT 1",
+                "SELECT path, cwd FROM sessions WHERE provider=?1 AND session_id=?2 AND is_subagent=0 ORDER BY modified_ns DESC, path DESC LIMIT 1",
                 params![provider.as_str(), session_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -330,6 +346,7 @@ fn read_hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<SearchHit> {
         cwd: row.get(2)?,
         timestamp: row.get(3)?,
         snippet: row.get(4)?,
+        title: row.get(5)?,
     })
 }
 

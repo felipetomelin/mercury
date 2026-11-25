@@ -103,6 +103,7 @@ fn grouped_worktrees_render_parent_branch_and_indented_child() {
         workspace_id: "ws_2".into(),
         active_tab_id: "tab_ws2".into(),
         new_workspace_cwd: "/repo/feature".into(),
+        project_path: Some("/repo/feature".into()),
         number: 2,
         label: "repo-feature".into(),
         custom_label: false,

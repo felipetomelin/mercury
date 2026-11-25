@@ -34,6 +34,8 @@ pub struct HistoryHitInfo {
     pub cwd: Option<String>,
     pub timestamp: String,
     pub snippet: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

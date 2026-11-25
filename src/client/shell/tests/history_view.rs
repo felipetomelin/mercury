@@ -22,6 +22,7 @@ fn hit() -> HistoryHitInfo {
         cwd: Some("/project".into()),
         timestamp: "2020-01-01T00:00:00Z".into(),
         snippet: "old conversation".into(),
+        title: Some("old conversation".into()),
     }
 }
 
@@ -79,6 +80,7 @@ fn history_row_keeps_search_snippet_visible_with_long_project_path() {
     state.history_view.hits[0].cwd =
         Some("/private/tmp/a-very-long-fixture-project-directory/with/deep/nested/path".into());
     state.history_view.hits[0].snippet = "needle-visible-in-row".into();
+    state.history_view.query = "needle".into();
 
     let frame = state.compose(80, 24).unwrap();
     let text = frame
@@ -201,6 +203,7 @@ fn row_click_selects_without_starting_agent() {
         cwd: Some("/other".into()),
         timestamp: "2020-01-02T00:00:00Z".into(),
         snippet: "another conversation".into(),
+        title: None,
     });
     state.compose(110, 30).unwrap();
     let row = state.hits.history_rows[1].0;
@@ -279,4 +282,94 @@ fn busy_new_pane_retries_resume_on_tick_without_blocking_input() {
     assert!(
         matches!(&request(&retry.actions).method, Method::AgentStart(params) if params.pane_id == "new-pane" && params.args == ["resume", "session-1"])
     );
+}
+
+#[test]
+fn history_shows_conversation_title_instead_of_session_id() {
+    let mut state = opened();
+    state.history_view.hits[0].title = Some("CI/CD – revisão 🚀".into());
+    let frame = state.compose(110, 30).unwrap();
+    let text = frame
+        .cells
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect::<String>();
+    assert!(text.contains("CI/CD – revisão 🚀"));
+    assert!(!text.contains("session-1"));
+    assert!(text.contains("codex"));
+    assert!(text.contains("2020-01-01"));
+    assert!(text.contains("/project"));
+}
+
+#[test]
+fn untitled_history_uses_readable_placeholder() {
+    let mut state = opened();
+    state.history_view.hits[0].title = None;
+    let frame = state.compose(110, 30).unwrap();
+    let text = frame
+        .cells
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect::<String>();
+    assert!(text.contains("Conversa sem título"));
+    assert!(!text.contains("session-1"));
+}
+
+#[test]
+fn duplicate_titles_reopen_the_selected_session_by_id() {
+    let mut state = opened();
+    state.history_view.hits[0].title = Some("CI/CD".into());
+    let mut second = hit();
+    second.session_id = "session-2".into();
+    second.title = Some("CI/CD".into());
+    state.history_view.hits.push(second);
+    state.history_view.selected = 1;
+    let open = state.handle_input_bytes(b"\r");
+    assert!(matches!(&request(&open.actions).method,
+        Method::HistoryResolve(params) if params.session_id == "session-2"));
+}
+
+#[test]
+fn project_marker_matches_history_workspace_and_chat_in_light_and_dark_themes() {
+    for palette in [Palette::mercury(), Palette::mercury_light()] {
+        let mut state = opened();
+        state.config.palette = palette.clone();
+        let mut projected = snapshot();
+        projected.workspaces[0].new_workspace_cwd = "/different/transient/cwd".into();
+        projected.panes[0].foreground_cwd = Some("/different/transient/cwd".into());
+        projected.agents.push(crate::protocol::ClientShellAgent {
+            pane_id: "pane_1".into(),
+            workspace_id: "ws_1".into(),
+            tab_id: "tab_1".into(),
+            name: Some("main".into()),
+            display_agent: None,
+            agent: Some("codex".into()),
+            title: Some("Renamed chat".into()),
+            terminal_title: None,
+            terminal_title_stripped: None,
+            agent_status: crate::api::schema::AgentStatus::Working,
+            state_change_seq: 1,
+            state_labels: vec![],
+            tokens: vec![],
+            focused: true,
+            usage: None,
+        });
+        state.set_snapshot(Box::new(projected));
+        state.history_view.hits[0].cwd = Some("/repo/./".into());
+        let frame = state.compose(110, 30).unwrap().to_ratatui_buffer().unwrap();
+        let history = state.hits.history_rows[0].0;
+        let workspace = state.hits.workspaces[0].rect;
+        let agent = state.hits.agents[0].0;
+        let expected =
+            super::super::project_color::color(Some("/repo"), &ClientEndpointId::Local, &palette);
+        for position in [
+            (history.x + 1, history.y),
+            (workspace.x, workspace.y),
+            (agent.x, agent.y),
+        ] {
+            assert_eq!(frame[position].symbol(), "▏");
+            assert_eq!(frame[position].fg, expected);
+        }
+        assert_eq!(frame[(history.x + 1, history.y)].bg, palette.active_row_bg);
+    }
 }

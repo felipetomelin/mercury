@@ -693,6 +693,7 @@ impl ClientShellState {
                 &self.config,
                 &mut self.history_view,
                 &mut self.hits,
+                &self.active_endpoint_id,
             );
             frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
             self.hits.panes.clear();
