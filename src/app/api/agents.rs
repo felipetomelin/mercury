@@ -204,15 +204,7 @@ impl App {
         let Some(agent) = self.agent_info(resolved.ws_idx, resolved.pane_id) else {
             return Err(agent_not_found(id, &params.target));
         };
-        let completion = runtime
-            .queue_user_input_submission(
-                Bytes::from(text),
-                Bytes::from(enter),
-                AGENT_PROMPT_SUBMIT_DELAY,
-                submit_deadline,
-            )
-            .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
-        if id == "cron:pane" {
+        let excluded_origin = if id == "cron:pane" {
             let provider = match expected_agent {
                 crate::detect::Agent::Claude => Some(mercury_learn::transcript::Provider::Claude),
                 crate::detect::Agent::Codex => Some(mercury_learn::transcript::Provider::Codex),
@@ -223,10 +215,55 @@ impl App {
                 let session_id = self
                     .learn_transcripts
                     .get(&key)
-                    .map_or("*", |observed| observed.session_id.as_str());
-                self.learn_excluded_sessions
-                    .insert(key, session_id.to_owned());
+                    .map(|observed| observed.session_id.clone())
+                    .or_else(|| {
+                        self.pane_terminal(resolved.ws_idx, resolved.pane_id)
+                            .and_then(|t| t.persisted_agent_session.as_ref())
+                            .filter(|s| s.agent == mercury_learn::checkpoints::name(provider))
+                            .map(|s| s.session_ref.value.clone())
+                    })
+                    .unwrap_or_else(|| "*".into());
+                if self.policy.background_updates {
+                    let journal = mercury_learn::checkpoints::Journal::open(
+                        &crate::session::data_dir().join("learn"),
+                    )
+                    .map_err(|_| {
+                        encode_error(
+                            id.clone(),
+                            "learn_unavailable",
+                            "cannot persist automated origin before submission",
+                        )
+                    })?;
+                    let result = if session_id == "*" {
+                        journal.exclude_next(&terminal.id.to_string(), provider)
+                    } else {
+                        journal.exclude(provider, &session_id)
+                    };
+                    result.map_err(|_| {
+                        encode_error(
+                            id.clone(),
+                            "learn_unavailable",
+                            "cannot persist automated origin before submission",
+                        )
+                    })?;
+                }
+                Some((key, session_id))
+            } else {
+                None
             }
+        } else {
+            None
+        };
+        let completion = runtime
+            .queue_user_input_submission(
+                Bytes::from(text),
+                Bytes::from(enter),
+                AGENT_PROMPT_SUBMIT_DELAY,
+                submit_deadline,
+            )
+            .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
+        if let Some((key, session_id)) = excluded_origin {
+            self.learn_excluded_sessions.insert(key, session_id);
         }
         Ok((id, agent, completion))
     }

@@ -116,3 +116,7 @@ build-libghostty-vt:
 # Print default config
 default-config:
     cargo run --release --locked -- --default-config
+
+# Portable checkpoint/storage/retrieval contracts; no provider authentication.
+test-memory:
+    cargo test -p mercury-learn -p mercury-knowledge --locked

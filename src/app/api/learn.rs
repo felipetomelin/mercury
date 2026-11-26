@@ -60,13 +60,26 @@ impl App {
         let current = self.pane_terminal(ws_idx, pane_id).is_some_and(|terminal| {
             terminal.session_ref_is_current_for("mercury:claude", "claude", &session_ref)
         });
-        let known_path = self
+        let mut known_path = self
             .learn_transcripts
             .get(&(pane_id, Provider::Claude))
             .is_some_and(|observed| {
                 observed.session_id == params.session_id
                     && observed.path == Path::new(&params.transcript_path)
             });
+        if current && !known_path && self.policy.background_updates {
+            known_path = mercury_learn::checkpoints::Journal::open(
+                &crate::session::data_dir().join("learn"),
+            )
+            .and_then(|j| {
+                j.trusted(
+                    Provider::Claude,
+                    &params.session_id,
+                    Path::new(&params.transcript_path),
+                )
+            })
+            .unwrap_or(false);
+        }
         if !current || !known_path {
             return encode_error(
                 id,
@@ -84,6 +97,25 @@ impl App {
                 "learn_excluded_origin",
                 "session originated from automation",
             );
+        }
+        if self.policy.background_updates {
+            return match mercury_learn::checkpoints::Journal::open(
+                &crate::session::data_dir().join("learn"),
+            )
+            .and_then(|j| {
+                j.request(
+                    Provider::Claude,
+                    &params.session_id,
+                    Path::new(&params.transcript_path),
+                )
+            }) {
+                Ok(true) => encode_success(id, ResponseResult::Ok {}),
+                _ => encode_error(
+                    id,
+                    "learn_unavailable",
+                    "could not persist checkpoint; verify trusted session and origin",
+                ),
+            };
         }
         let captured = !turn && self.capture_completed_session(&trigger);
         let Some(worker) = self.learn.as_ref().filter(|_| self.learn_config.enabled) else {

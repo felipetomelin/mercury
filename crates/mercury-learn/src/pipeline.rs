@@ -99,6 +99,11 @@ pub async fn review_session(
             .ok_or(PipelineError::Policy(PolicyError::UnknownTarget))?
             .before_hash
             .as_str();
+        if target.kind == crate::policy::TargetKind::Memory
+            && crate::storage::hash(proposal.content.as_bytes()) == snapshot_hash
+        {
+            continue;
+        }
         let before_hash = if target.kind == crate::policy::TargetKind::CronJob {
             cron_after_hashes
                 .get(&target.path)

@@ -1,5 +1,20 @@
 # Mercury — Plano e Levantamento
 
+## Memória/Obsidian e Learn — implementação portátil, 2026-11-26
+
+Spec 014 implementa checkpoints de tarefas com o chat aberto, diário privado e
+snapshots imutáveis, continuidade por ID após restart/handoff, exclusão persistente
+de automações e consumidores independentes para memória/notas. Caminhos, vault,
+provedores e consentimentos vêm da instalação, sem dados pessoais no código.
+Contexto local: FTS/vetores hash/grafo limitado, até 8 fontes/8 KiB, cache e zero
+LLM no retrieval; respostas GraphRAG opcionais também reutilizam cache válido.
+Diagnóstico/recuperação focal/undo documentados em
+`docs/knowledge/continuous-learning.md`. CI de contratos Linux/macOS adicionado.
+Workspace serial 4.186 PASS; principal 3.724 PASS; Learn/Knowledge finais 135 PASS;
+manutenção 80 PASS; smokes reais sintéticos Learn/undo e Knowledge/nota/grafo PASS.
+Evidências e limites em `specs/014-reliable-memory-learning/validation.md`.
+Publicação autorizada pelo usuário após gates locais PASS; sem ativação/deploy pessoal.
+
 ## Usage / Crons / visual — concluído localmente, 2026-10-29
 
 Novo pedido especificado em `specs/009-usage-cron-ux/`: cotas das contas atuais,

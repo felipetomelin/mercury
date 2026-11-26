@@ -2979,6 +2979,10 @@ impl HeadlessServer {
                 self.app.knowledge_config.clone(),
                 self.app.route.clone(),
                 self.app.usage.route_limits(),
+                self.app
+                    .knowledge_automation
+                    .as_ref()
+                    .is_some_and(|worker| worker.is_running()),
             );
             return changed;
         }
@@ -3027,7 +3031,11 @@ impl HeadlessServer {
                 crate::api::schema::LearnRuntimeInfo {
                     enabled: self.app.learn_config.enabled,
                     external_allowed: self.app.learn_config.allow_external,
-                    worker_running: self.app.learn.is_some(),
+                    worker_running: self
+                        .app
+                        .learn
+                        .as_ref()
+                        .is_some_and(|worker| worker.is_running()),
                 },
             );
             return changed;

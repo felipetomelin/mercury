@@ -45,6 +45,9 @@ fn status(options: &[String]) -> io::Result<i32> {
             runtime["enabled"], runtime["external_allowed"], runtime["worker_running"]
         );
     }
+    if let Some(checkpoints) = status.get("checkpoints") {
+        println!("checkpoints: {checkpoints}");
+    }
     let triggers = &status["triggers"];
     println!(
         "ledger: {}",

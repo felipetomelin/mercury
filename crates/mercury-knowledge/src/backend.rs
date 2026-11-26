@@ -98,9 +98,41 @@ impl<'a> NativeModel<'a> {
         })
     }
     pub fn doctor(&self) -> Result<Value> {
-        let providers = &self.versions;
+        let mut capabilities = BTreeMap::new();
+        for provider in self.versions.keys() {
+            let program = resolve_configured(&self.config, provider)?;
+            let (args, required): (&[&str], &[&str]) = if provider == "codex" {
+                (
+                    &["exec", "--help"],
+                    &[
+                        "--ignore-user-config",
+                        "--ignore-rules",
+                        "--ephemeral",
+                        "--output-schema",
+                        "--sandbox",
+                    ],
+                )
+            } else {
+                (
+                    &["--help"],
+                    &[
+                        "--tools",
+                        "--permission-mode",
+                        "--no-session-persistence",
+                        "--json-schema",
+                        "--max-budget-usd",
+                    ],
+                )
+            };
+            let help = probe(&program, args, 128 * 1024, self.cancel);
+            let missing: Vec<_> = required
+                .iter()
+                .filter(|flag| help.as_ref().map_or(true, |text| !text.contains(**flag)))
+                .collect();
+            capabilities.insert(provider.clone(),json!({"supported":missing.is_empty(),"missing_flags":missing,"probe":"help only; authentication not checked"}));
+        }
         Ok(
-            json!({"backend":"native_cli","providers":providers,"routing":"existing Mercury rules, then task defaults; observed quota respected","vectorizer":"local-hash-v1 + LLM query expansion","authenticated_smoke":"not run by doctor","usage":self.observations()}),
+            json!({"backend":"native_cli","providers":self.versions,"capabilities":capabilities,"routing":"existing Mercury rules, then task defaults; observed quota respected","vectorizer":"local-hash-v1 + optional LLM query expansion for hybrid search","authenticated_smoke":"not run by doctor","usage":self.observations()}),
         )
     }
     pub fn observations(&self) -> Vec<Value> {
@@ -550,15 +582,18 @@ pub(crate) fn validate_vector(v: &[f32]) -> Result<()> {
 }
 
 fn version(program: &Path, cancel: &AtomicBool) -> Result<String> {
+    probe(program, &["--version"], 4096, cancel)
+}
+fn probe(program: &Path, args: &[&str], max_bytes: usize, cancel: &AtomicBool) -> Result<String> {
     let mut command = Command::new(program);
     command
-        .arg("--version")
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     let mut child = command.spawn()?;
     let out = child.stdout.take().ok_or(Error::Unavailable)?;
-    let reader = std::thread::spawn(move || bounded(out, 4096));
+    let reader = std::thread::spawn(move || bounded(out, max_bytes));
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if cancel.load(Ordering::Relaxed) || Instant::now() >= deadline {

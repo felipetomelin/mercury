@@ -25,7 +25,8 @@ pub(crate) use env::{
 };
 pub(crate) use registry::{
     experimental_letta_integration_status, installed_integration_statuses,
-    integration_recommendations, integration_target_label, print_outdated_update_notice,
+    integration_recommendations, integration_target_label, learning_hook_readiness,
+    print_outdated_update_notice,
 };
 pub(crate) use statusline::previous_command as statusline_previous_command;
 pub(crate) use types::{

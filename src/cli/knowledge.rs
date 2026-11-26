@@ -24,13 +24,19 @@ pub(super) fn run(args: &[String], context: bool) -> io::Result<i32> {
             "related" => Action::Related,
             "ask" => Action::Ask,
             "capture" => Action::Capture,
-            "review" => Action::Review,
+            "review" | "retry" | "checkpoint" => Action::Review,
             "proposals" => Action::Proposals,
             "jobs" => Action::JobShow,
             _ => return Ok(2),
         }
     };
     let mut p = KnowledgeParams::new(action);
+    if command == "retry" {
+        p.mode = "retry-capture".into();
+    }
+    if command == "checkpoint" {
+        p.mode = "checkpoint".into();
+    }
     let mut is_json = false;
     let mut stdin = false;
     let mut i = 0;
@@ -48,7 +54,7 @@ pub(super) fn run(args: &[String], context: bool) -> io::Result<i32> {
             "--json" => is_json = true,
             "--graph" => p.graph = true,
             "--rebuild" => p.rebuild = true,
-            "--completed" => p.completed = true,
+            "--completed" | "--apply" => p.completed = true,
             "--stdin" => stdin = true,
             "--query" | "--project" | "--kind" | "--status" | "--service" | "--id" | "--mode"
             | "--provider" | "--title" => {

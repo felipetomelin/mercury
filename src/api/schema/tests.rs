@@ -442,6 +442,7 @@ fn learn_status_contract_reports_ledger_wide_counts() {
         id: "learn-status".into(),
         result: ResponseResult::LearnStatus {
             status: LearnStatusInfo {
+                checkpoints: None,
                 runtime: None,
                 ledger_present: true,
                 changes: LearnChangeCounts {

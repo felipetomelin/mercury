@@ -1640,6 +1640,55 @@ impl App {
             if let Some(provider) = learn_provider {
                 let key = (pane_id, provider);
                 self.learn_transcripts.remove(&key);
+                let origin_terminal = self
+                    .pane_terminal(ws_idx, pane_id)
+                    .map(|t| t.id.to_string());
+                if self.policy.background_updates {
+                    if let (Some(terminal), Some(session)) =
+                        (origin_terminal.as_ref(), session_ref.as_ref())
+                    {
+                        let result = mercury_learn::checkpoints::Journal::open(
+                            &crate::session::data_dir().join("learn"),
+                        )
+                        .and_then(|j| {
+                            if j.next_excluded(terminal, provider)? {
+                                j.exclude(provider, &session.value)?;
+                                j.clear_next(terminal, provider)?;
+                            }
+                            Ok(())
+                        });
+                        if result.is_err() {
+                            return encode_error(
+                                id,
+                                "learn_unavailable",
+                                "could not recover automated origin",
+                            );
+                        }
+                    }
+                }
+                if learn_report.is_none() && self.policy.background_updates {
+                    if let Some(session) = session_ref
+                        .as_ref()
+                        .filter(|s| s.kind == crate::agent_resume::AgentSessionRefKind::Id)
+                    {
+                        let excluded = self
+                            .learn_excluded_sessions
+                            .get(&key)
+                            .is_some_and(|s| s == "*" || s == &session.value);
+                        if mercury_learn::checkpoints::Journal::open(
+                            &crate::session::data_dir().join("learn"),
+                        )
+                        .and_then(|j| j.register_pending(provider, &session.value, excluded))
+                        .is_err()
+                        {
+                            return encode_error(
+                                id,
+                                "learn_unavailable",
+                                "could not persist session checkpoint binding",
+                            );
+                        }
+                    }
+                }
                 if let Some((session_id, path)) = learn_report.filter(|(session_id, path)| {
                     crate::app::learn::ReviewTrigger::session_end(provider, session_id, path)
                         .is_some()
@@ -1652,6 +1701,22 @@ impl App {
                             self.learn_excluded_sessions.remove(&key);
                         }
                         _ => {}
+                    }
+                    if self.policy.background_updates {
+                        let excluded = self.learn_excluded_sessions.get(&key) == Some(&session_id);
+                        let result = mercury_learn::checkpoints::Journal::open(
+                            &crate::session::data_dir().join("learn"),
+                        )
+                        .and_then(|journal| {
+                            journal.register(provider, &session_id, &path, excluded)
+                        });
+                        if result.is_err() {
+                            return encode_error(
+                                id,
+                                "learn_unavailable",
+                                "could not persist session checkpoint binding",
+                            );
+                        }
                     }
                     self.learn_transcripts.insert(
                         key,

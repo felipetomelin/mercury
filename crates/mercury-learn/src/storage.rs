@@ -223,6 +223,7 @@ impl Storage {
         let database = root.join("ledger.sqlite");
         ensure_private_database(&database)?;
         let connection = Connection::open(&database)?;
+        connection.busy_timeout(std::time::Duration::from_secs(2))?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;

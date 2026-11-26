@@ -9417,6 +9417,7 @@
             "changes": {
               "$ref": "#/schemas/success_response/$defs/LearnChangeCounts"
             },
+            "checkpoints": true,
             "ledger_present": {
               "type": "boolean"
             },

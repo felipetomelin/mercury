@@ -115,6 +115,8 @@ pub struct LearnTriggerInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct LearnStatusInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoints: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<LearnRuntimeInfo>,
     pub ledger_present: bool,
     pub changes: LearnChangeCounts,

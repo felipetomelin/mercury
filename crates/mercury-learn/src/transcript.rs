@@ -6,27 +6,28 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Provider {
     Claude,
     Codex,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Role {
     User,
     Assistant,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transcript {
     pub provider: Provider,
     pub session_id: String,
@@ -100,10 +101,11 @@ impl From<std::io::Error> for TranscriptError {
     }
 }
 
-struct Retained {
-    identity: Option<String>,
-    message: Message,
-    clipped: bool,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct Retained {
+    pub(crate) identity: Option<String>,
+    pub(crate) message: Message,
+    pub(crate) clipped: bool,
 }
 
 pub fn read(
@@ -194,11 +196,12 @@ pub fn read(
                 return Err(TranscriptError::InvalidSession);
             }
         } else if event.get("type").and_then(Value::as_str) == Some("session_meta")
-            && event["payload"].get("session_id").and_then(Value::as_str)
-                != Some(expected_session_id)
+            && codex_identity(&event["payload"])? != Some(expected_session_id)
         {
             return Err(TranscriptError::InvalidSession);
         }
+        truncated |= event["mercury_checkpoint_truncated"] == true
+            || event["payload"]["mercury_checkpoint_truncated"] == true;
         if let Some(item) = parse_message(&event, provider, limits.message_bytes) {
             truncated |= item.clipped;
             let position = item.identity.as_deref().and_then(|identity| {
@@ -242,7 +245,7 @@ pub fn read(
     })
 }
 
-fn read_identity(
+pub(crate) fn read_identity(
     header: &[u8],
     provider: Provider,
     expected_id: &str,
@@ -271,10 +274,8 @@ fn read_identity(
             Provider::Codex
                 if event.get("type").and_then(Value::as_str) == Some("session_meta") =>
             {
-                let id = event["payload"]
-                    .get("session_id")
-                    .and_then(Value::as_str)
-                    .ok_or(TranscriptError::MissingIdentity)?;
+                let id =
+                    codex_identity(&event["payload"])?.ok_or(TranscriptError::MissingIdentity)?;
                 if id != expected_id {
                     return Err(TranscriptError::InvalidSession);
                 }
@@ -288,7 +289,11 @@ fn read_identity(
     Ok((found_id, cwd))
 }
 
-fn parse_message(event: &Value, provider: Provider, max_bytes: usize) -> Option<Retained> {
+pub(crate) fn parse_message(
+    event: &Value,
+    provider: Provider,
+    max_bytes: usize,
+) -> Option<Retained> {
     match provider {
         Provider::Claude => {
             if event.get("isSidechain").and_then(Value::as_bool) == Some(true) {
@@ -400,7 +405,7 @@ fn absolute_cwd(value: Option<&str>) -> Option<PathBuf> {
     (path.is_absolute() && value.len() <= 4096).then(|| path.to_path_buf())
 }
 
-fn check_path(path: &Path) -> Result<(), TranscriptError> {
+pub(crate) fn check_path(path: &Path) -> Result<(), TranscriptError> {
     if !path.is_absolute() {
         return Err(TranscriptError::InvalidPath);
     }
@@ -434,4 +439,17 @@ fn same_file(before: &fs::Metadata, after: &fs::Metadata) -> bool {
         }
     }
     before.modified().ok() == after.modified().ok()
+}
+
+fn codex_identity(payload: &Value) -> Result<Option<&str>, TranscriptError> {
+    let id = payload.get("id").and_then(Value::as_str);
+    let session = payload.get("session_id").and_then(Value::as_str);
+    if id.zip(session).is_some_and(|(a, b)| a != b)
+        || payload
+            .get("source")
+            .is_some_and(|v| v.get("subagent").is_some())
+    {
+        return Err(TranscriptError::InvalidSession);
+    }
+    Ok(session.or(id))
 }

@@ -139,6 +139,18 @@ impl ReviewTrigger {
         }
     }
 
+    pub(crate) fn checkpoint(c: &mercury_learn::checkpoints::Checkpoint) -> Option<Self> {
+        c.verify().ok()?;
+        let (_, mut session) = session_source(c.provider, &c.session_id, &c.path, None)?;
+        session.expected_fingerprint = transcript_fingerprint(&c.path).ok();
+        Some(Self {
+            key: format!("checkpoint:{}", c.id),
+            origin: TriggerOrigin::ObservedSession,
+            session: Some(session),
+            probe_every: None,
+        })
+    }
+
     pub fn key(&self) -> &str {
         &self.key
     }
@@ -232,6 +244,17 @@ impl LearnWorker {
         config.validate().map_err(str::to_owned)?;
         let policy = Policy::new(config.target_policies())
             .map_err(|_| "invalid Learn target policy".to_string())?;
+        let checkpoint_policy = Policy::new(
+            config
+                .target_policies()
+                .into_iter()
+                .filter(|target| {
+                    target.id == "mercury-memory"
+                        && target.kind == mercury_learn::policy::TargetKind::Memory
+                })
+                .collect(),
+        )
+        .map_err(|_| "invalid managed checkpoint policy".to_string())?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -299,7 +322,11 @@ impl LearnWorker {
                     transcript_path: &session.transcript_path,
                     milestone_turns: session.milestone_turns,
                 },
-                &policy,
+                if trigger.key.starts_with("checkpoint:") {
+                    &checkpoint_policy
+                } else {
+                    &policy
+                },
                 || gate.load(Ordering::Acquire),
                 &reviewer,
                 &mut changes,
@@ -307,6 +334,13 @@ impl LearnWorker {
             let Ok(outcome) = outcome else {
                 return false;
             };
+            if outcome.applied_ids.is_empty() {
+                if let Some(id) = trigger.key.strip_prefix("checkpoint:") {
+                    if let Ok(journal) = mercury_learn::checkpoints::Journal::open(&handler_root) {
+                        let _ = journal.finish("learn", id, "no_change");
+                    }
+                }
+            }
             let mut applied_kinds = Vec::with_capacity(outcome.applied_ids.len());
             for id in &outcome.applied_ids {
                 let Ok(Some(record)) = changes.storage().get(id) else {
@@ -361,11 +395,43 @@ impl LearnWorker {
         let mut storage = Storage::open(root)?;
         let enabled = Arc::new(AtomicBool::new(enabled));
         let worker_enabled = Arc::clone(&enabled);
+        let journal_root = root.to_path_buf();
         let (sender, receiver) = mpsc::sync_channel::<ReviewTrigger>(QUEUE_CAPACITY);
         let handle = std::thread::Builder::new()
             .name("mercury-learn".into())
             .spawn(move || {
-                while let Ok(trigger) = receiver.recv() {
+                loop {
+                    let trigger = match receiver.recv_timeout(std::time::Duration::from_millis(500))
+                    {
+                        Ok(trigger) => trigger,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            if !worker_enabled.load(Ordering::Acquire) {
+                                continue;
+                            }
+                            let Ok(mut journal) =
+                                mercury_learn::checkpoints::Journal::open(&journal_root)
+                            else {
+                                continue;
+                            };
+                            resolve_learning_bindings(&journal);
+                            if journal.observe().is_err() {
+                                tracing::warn!("Learn checkpoint observation unavailable");
+                            }
+                            let Some(checkpoint) = journal
+                                .pending("learn")
+                                .ok()
+                                .and_then(|v| v.into_iter().next())
+                            else {
+                                continue;
+                            };
+                            let Some(trigger) = ReviewTrigger::checkpoint(&checkpoint) else {
+                                let _ = journal.finish("learn", &checkpoint.id, "failed");
+                                continue;
+                            };
+                            trigger
+                        }
+                    };
                     if !worker_enabled.load(Ordering::Acquire) {
                         continue;
                     }
@@ -387,9 +453,45 @@ impl LearnWorker {
                             };
                             if storage.finish_trigger(&trigger.key, status).is_err() {
                                 tracing::warn!("learn trigger could not be finalized");
+                            } else if let Some(id) = trigger.key.strip_prefix("checkpoint:") {
+                                if let Ok(journal) =
+                                    mercury_learn::checkpoints::Journal::open(&journal_root)
+                                {
+                                    if succeeded {
+                                        let _ = journal.finish("learn", id, "done");
+                                    } else {
+                                        let _ = journal.fail_learn(
+                                            id,
+                                            OffsetDateTime::now_utc().unix_timestamp().max(0)
+                                                as u64,
+                                        );
+                                    }
+                                }
                             }
                         }
-                        Ok(false) => {} // already claimed, even across restarts
+                        Ok(false) => {
+                            if let Some(id) = trigger.key.strip_prefix("checkpoint:") {
+                                if let Ok(journal) =
+                                    mercury_learn::checkpoints::Journal::open(&journal_root)
+                                {
+                                    let prior = storage.trigger_status(&trigger.key).ok().flatten();
+                                    if prior == Some(TriggerStatus::Failed) {
+                                        let _ = journal.fail_learn(
+                                            id,
+                                            OffsetDateTime::now_utc().unix_timestamp().max(0)
+                                                as u64,
+                                        );
+                                        continue;
+                                    }
+                                    let state = if prior == Some(TriggerStatus::Succeeded) {
+                                        "done"
+                                    } else {
+                                        "failed"
+                                    };
+                                    let _ = journal.finish("learn", id, state);
+                                }
+                            }
+                        } // already claimed, even across restarts
                         Err(_) => tracing::warn!("learn trigger could not be claimed"),
                     }
                 }
@@ -460,6 +562,11 @@ impl LearnWorker {
         }
     }
 
+    pub fn is_running(&self) -> bool {
+        self.enabled.load(Ordering::Acquire)
+            && self.handle.as_ref().is_some_and(|h| !h.is_finished())
+    }
+
     pub fn disable(&self) {
         self.enabled.store(false, Ordering::Release);
     }
@@ -509,6 +616,21 @@ fn valid_trigger_key(key: &str) -> bool {
         && key
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_'))
+}
+
+/// Resolve only exact IDs reported by managed hooks, off the UI thread.
+pub(crate) fn resolve_learning_bindings(journal: &mercury_learn::checkpoints::Journal) {
+    for (provider, id) in journal.unresolved().unwrap_or_default() {
+        let path = match provider {
+            Provider::Codex => mercury_usage::locate::default_codex_home()
+                .and_then(|home| mercury_usage::locate::codex_rollout_path(&home, &id, 365)),
+            Provider::Claude => mercury_usage::locate::default_claude_home()
+                .and_then(|home| mercury_usage::locate::claude_transcript_path(&home, None, &id)),
+        };
+        if let Some(path) = path {
+            let _ = journal.register(provider, &id, &path, false);
+        }
+    }
 }
 
 fn resolve_turn_probe(trigger: ReviewTrigger) -> Option<ReviewTrigger> {
@@ -632,6 +754,44 @@ fn run_weekly_curation(_: &Path, _: &Policy, _: &str, _: &AtomicBool) -> bool {
 }
 
 impl super::App {
+    /// Recover only exact sessions already attached to Mercury terminals. This
+    /// is startup work, never a scan for the latest session or a global backfill.
+    pub(crate) fn restore_learning_sources(&self) -> Result<(), String> {
+        if !self.policy.background_updates {
+            return Ok(());
+        }
+        let journal =
+            mercury_learn::checkpoints::Journal::open(&crate::session::data_dir().join("learn"))
+                .map_err(|_| "checkpoint journal unavailable".to_string())?;
+        for terminal in self.state.terminals.values() {
+            let Some(binding) = &terminal.persisted_agent_session else {
+                continue;
+            };
+            let provider = match (binding.source.as_str(), binding.agent.as_str()) {
+                ("mercury:claude", "claude") => Provider::Claude,
+                ("mercury:codex", "codex") => Provider::Codex,
+                _ => continue,
+            };
+            if binding.session_ref.kind != crate::agent_resume::AgentSessionRefKind::Id {
+                continue;
+            }
+            let id = &binding.session_ref.value;
+            let path = match provider {
+                Provider::Claude => mercury_usage::locate::default_claude_home().and_then(|home| {
+                    mercury_usage::locate::claude_transcript_path(&home, Some(&terminal.cwd), id)
+                }),
+                Provider::Codex => mercury_usage::locate::default_codex_home()
+                    .and_then(|home| mercury_usage::locate::codex_rollout_path(&home, id, 365)),
+            };
+            if let Some(path) = path {
+                journal
+                    .register(provider, id, &path, false)
+                    .map_err(|_| "checkpoint binding recovery failed".to_string())?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn enable_learn(&mut self) -> Result<(), String> {
         if !self.learn_config.enabled || !self.learn_config.allow_external || self.learn.is_some() {
             return Ok(());
@@ -641,9 +801,13 @@ impl super::App {
 
         #[cfg(unix)]
         {
+            self.restore_learning_sources()?;
             let data_dir = crate::session::data_dir();
             let mut config = self.learn_config.clone();
-            if config.targets.is_empty() {
+            // Reserved internal target: its path and cap always come from this
+            // installation, even when a legacy explicit target reused its ID.
+            config.targets.retain(|t| t.id != "mercury-memory");
+            {
                 let managed = if self.knowledge_config.enabled {
                     self.knowledge_config
                         .prepare_at(&data_dir.join("knowledge"))

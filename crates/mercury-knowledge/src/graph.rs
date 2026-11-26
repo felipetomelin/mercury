@@ -1,5 +1,6 @@
 use crate::backend::Model;
 use crate::*;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -411,6 +412,14 @@ impl Index {
         out.truncate(limit);
         Ok(out)
     }
+    fn cache_answer(&self, id: &str, answer: Answer) -> Result<Answer> {
+        self.db.execute("DELETE FROM answer_cache WHERE id IN (SELECT id FROM answer_cache ORDER BY rowid DESC LIMIT -1 OFFSET 127)",[])?;
+        self.db.execute(
+            "INSERT OR REPLACE INTO answer_cache VALUES(?1,?2)",
+            params![id, serde_json::to_string(&answer)?],
+        )?;
+        Ok(answer)
+    }
     pub fn ask(
         &self,
         question: &str,
@@ -434,6 +443,23 @@ impl Index {
         let d: Derived = serde_json::from_value(self.derived(&model.fingerprint())?.ok_or(
             Error::Invalid("GraphRAG index missing or model changed; rebuild"),
         )?)?;
+        self.db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS answer_cache(id TEXT PRIMARY KEY,body TEXT NOT NULL);",
+        )?;
+        let cache_id = hash(&serde_json::to_vec(
+            &json!({"endpoint":"grounded-answer-v1","question":question,"mode":mode,"filter":filter,"max_chars":max_chars,"revision":s.revision,"model":model.fingerprint(),"graph":hash(&serde_json::to_vec(&d)?)}),
+        )?);
+        let cached: Option<String> = self
+            .db
+            .query_row(
+                "SELECT body FROM answer_cache WHERE id=?1",
+                [&cache_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(body) = cached {
+            return Ok(serde_json::from_str(&body)?);
+        }
         let mut hits = self.hybrid(question, filter, 10, model)?;
         let mut intermediate = Vec::new();
         if mode == "local" {
@@ -511,35 +537,41 @@ impl Index {
         let allowed: BTreeSet<_> = hits.iter().map(|h| h.chunk_id.clone()).collect();
         intermediate.retain(|c| evidence_valid(&c.evidence, &allowed));
         if hits.is_empty() {
-            return Ok(Answer {
-                revision: s.revision,
-                mode: mode.into(),
-                insufficient: true,
-                claims: vec![],
-                sources: vec![],
-                inferred_relations: vec![],
-                fingerprint: model.fingerprint(),
-            });
+            return self.cache_answer(
+                &cache_id,
+                Answer {
+                    revision: s.revision,
+                    mode: mode.into(),
+                    insufficient: true,
+                    claims: vec![],
+                    sources: vec![],
+                    inferred_relations: vec![],
+                    fingerprint: model.fingerprint(),
+                },
+            );
         }
         checked(cancel)?;
         let grounded=grounded_call(model,"answer only supported claims; cite exact chunk IDs; if unsupported return insufficient true and empty claims",&json!({"question":question,"sources":hits,"partial_claims":intermediate}),&allowed,cancel)?;
         checked(cancel)?;
-        Ok(Answer {
-            revision: s.revision,
-            mode: mode.into(),
-            insufficient: grounded.insufficient,
-            claims: grounded.claims,
-            sources: hits,
-            inferred_relations: d
-                .relations
-                .into_iter()
-                .filter(|r| {
-                    r.origin == "inferred" && r.evidence.iter().any(|e| allowed.contains(e))
-                })
-                .take(100)
-                .collect(),
-            fingerprint: model.fingerprint(),
-        })
+        self.cache_answer(
+            &cache_id,
+            Answer {
+                revision: s.revision,
+                mode: mode.into(),
+                insufficient: grounded.insufficient,
+                claims: grounded.claims,
+                sources: hits,
+                inferred_relations: d
+                    .relations
+                    .into_iter()
+                    .filter(|r| {
+                        r.origin == "inferred" && r.evidence.iter().any(|e| allowed.contains(e))
+                    })
+                    .take(100)
+                    .collect(),
+                fingerprint: model.fingerprint(),
+            },
+        )
     }
 }
 fn cosine(a: &[f32], b: &[f32]) -> Result<f64> {

@@ -121,8 +121,10 @@ and generated answers use your authenticated Codex/Claude CLIs only after explic
 configuration of external access. Responses carry source references; inferred
 relations remain distinct from reviewed decisions.
 
-With external processing configured, completed agent sessions are captured into
-proposed notes, indexed and included in GraphRAG automatically. A background
+With external processing configured, completed tasks in registered main agent
+sessions produce immutable checkpoints, even while the chat stays open. Learn
+updates managed memory and Knowledge publishes proposed notes independently.
+Notes are indexed locally and included in GraphRAG automatically. A background
 monitor picks up vault edits; durable queues, retries and a daily call limit
 control automatic work. Explicit `enabled = false` settings remain respected.
 

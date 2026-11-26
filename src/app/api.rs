@@ -595,11 +595,15 @@ impl App {
             if self.knowledge_automation.is_some() && !self.capture_completed_session(&trigger) {
                 tracing::warn!("Knowledge automatic capture queue unavailable or full");
             }
-            if let Some(worker) = self.learn.as_ref().filter(|_| self.learn_config.enabled) {
+            if let Some(worker) = self
+                .learn
+                .as_ref()
+                .filter(|_| self.learn_config.enabled && !self.policy.background_updates)
+            {
                 let _ = worker.submit(trigger);
             }
         }
-        if self.learn_config.enabled {
+        if self.learn_config.enabled && !self.policy.background_updates {
             if let (Some(worker), Some(trigger)) = (self.learn.as_ref(), codex_turn_probe) {
                 let _ = worker.submit(trigger);
             }

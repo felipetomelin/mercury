@@ -59,6 +59,7 @@ fn opened() -> ClientShellState {
         &requests[1].id,
         Ok(ResponseResult::LearnStatus {
             status: LearnStatusInfo {
+                checkpoints: None,
                 runtime: None,
                 ledger_present: true,
                 changes: LearnChangeCounts {

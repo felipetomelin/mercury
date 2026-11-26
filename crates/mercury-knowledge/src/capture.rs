@@ -17,6 +17,8 @@ pub struct Proposal {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bundle {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<ContextBudget>,
     pub id: String,
     pub revision: String,
     pub project: String,
@@ -30,6 +32,13 @@ pub struct Bundle {
     #[serde(default)]
     pub inferred_relations: Vec<Relation>,
     pub created: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextBudget {
+    pub max_bytes: usize,
+    pub max_sources: usize,
+    pub estimated_tokens: usize,
+    pub estimate_method: String,
 }
 impl Index {
     pub fn propose(
@@ -48,7 +57,37 @@ impl Index {
         project: &str,
         markdown: &str,
     ) -> Result<Proposal> {
-        self.propose_with_status(source, title, project, markdown, "proposed")
+        validate_proposal_input(source, title, project, markdown)?;
+        self.db.execute_batch("CREATE TABLE IF NOT EXISTS automatic_lessons(project TEXT NOT NULL,digest TEXT NOT NULL,proposal TEXT NOT NULL,PRIMARY KEY(project,digest)); CREATE TABLE IF NOT EXISTS lesson_observations(source TEXT PRIMARY KEY,proposal TEXT NOT NULL);")?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.db,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let digest = hash(markdown.trim().as_bytes());
+        let known: Option<String> = self
+            .db
+            .query_row(
+                "SELECT proposal FROM automatic_lessons WHERE project=?1 AND digest=?2",
+                params![project, digest],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let proposal = match known {
+            Some(id) => self
+                .proposal(&id)?
+                .ok_or(Error::Invalid("missing deduplicated proposal"))?,
+            None => self.propose_with_status(source, title, project, markdown, "proposed")?,
+        };
+        self.db.execute(
+            "INSERT OR IGNORE INTO automatic_lessons VALUES(?1,?2,?3)",
+            params![project, digest, proposal.id],
+        )?;
+        self.db.execute(
+            "INSERT OR IGNORE INTO lesson_observations VALUES(?1,?2)",
+            params![source, proposal.id],
+        )?;
+        tx.commit()?;
+        Ok(proposal)
     }
     fn propose_with_status(
         &self,
@@ -58,18 +97,7 @@ impl Index {
         markdown: &str,
         status: &str,
     ) -> Result<Proposal> {
-        if source.is_empty()
-            || source.len() > 512
-            || title.is_empty()
-            || title.len() > 256
-            || project.len() > 128
-            || markdown.is_empty()
-            || markdown.len() > 32_000
-            || title.chars().any(char::is_control)
-            || project.chars().any(char::is_control)
-        {
-            return Err(Error::Invalid("invalid capture proposal"));
-        }
+        validate_proposal_input(source, title, project, markdown)?;
         let id = hash(format!("{source}\0{project}\0{markdown}").as_bytes());
         if let Some(p) = self.proposal(&id)? {
             return Ok(p);
@@ -189,7 +217,31 @@ impl Index {
         if project.is_empty() || project.len() > 128 {
             return Err(Error::Invalid("context requires a project"));
         }
-        let sources = self.search(
+        const MAX_BYTES: usize = 8192;
+        let revision = self.status()?.revision;
+        // This endpoint is deliberately model-free. Its cache includes the
+        // retrieval policy, trust rules and complete output budget.
+        let id = hash(&serde_json::to_vec(
+            &serde_json::json!({"policy":"local-context-v2:fts+hash+explicit-hop1:trust-status","max_bytes":8192,"max_sources":8,"revision":revision,"project":project,"query":query}),
+        )?);
+        if query.len() > 2048 || query.chars().any(char::is_control) {
+            return Err(Error::Invalid("invalid knowledge search"));
+        }
+        let cached: Option<String> = self
+            .db
+            .query_row(
+                "SELECT body FROM bundles WHERE id=?1 AND revision=?2",
+                params![id, revision],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(body) = cached {
+            return Ok(serde_json::from_str(&body)?);
+        }
+        let snapshot = self
+            .snapshot()?
+            .ok_or(Error::Invalid("index the vault first"))?;
+        let mut candidates = self.search(
             query,
             &Filter {
                 project: Some(project.into()),
@@ -197,25 +249,89 @@ impl Index {
             },
             20,
         )?;
-        let mut total = 0;
-        let sources: Vec<_> = sources
-            .into_iter()
-            .filter(|h| {
-                total += h.text.len();
-                total <= 24_000
+        let vector = crate::backend::local_features(query);
+        let mut semantic = Vec::new();
+        for n in snapshot
+            .notes
+            .iter()
+            .filter(|n| n.project == project && n.status != "deprecated")
+        {
+            for c in &n.chunks {
+                let v = crate::backend::local_features(&c.text);
+                let score: f64 = vector
+                    .iter()
+                    .zip(v)
+                    .map(|(a, b)| f64::from(*a) * f64::from(b))
+                    .sum();
+                if score > 0.05 {
+                    semantic.push(crate::store::hit(n, c, score));
+                }
+            }
+        }
+        semantic.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then(a.chunk_id.cmp(&b.chunk_id))
+        });
+        candidates.extend(semantic.into_iter().take(20));
+        let seeds: std::collections::BTreeSet<_> = candidates
+            .iter()
+            .take(4)
+            .map(|h| h.note_id.clone())
+            .collect();
+        // Expand one explicit hop only; inferred edges never become decisions.
+        let neighbors: std::collections::BTreeSet<_> = snapshot
+            .relations
+            .iter()
+            .filter_map(|r| {
+                if r.origin != "explicit" {
+                    return None;
+                }
+                if seeds.contains(&r.source) {
+                    Some(r.target.clone())
+                } else if seeds.contains(&r.target) {
+                    Some(r.source.clone())
+                } else {
+                    None
+                }
             })
             .collect();
-        let revision = self.status()?.revision;
-        let id = hash(
-            format!(
-                "{revision}:{project}:{query}:{}",
-                serde_json::to_string(&sources)?
-            )
-            .as_bytes(),
-        );
-        let snapshot = self
-            .snapshot()?
-            .ok_or(Error::Invalid("index the vault first"))?;
+        for n in snapshot
+            .notes
+            .iter()
+            .filter(|n| {
+                n.project == project && n.status != "deprecated" && neighbors.contains(&n.id)
+            })
+            .take(2)
+        {
+            if let Some(c) = n
+                .chunks
+                .iter()
+                .find(|c| c.heading != "Properties")
+                .or(n.chunks.first())
+            {
+                candidates.insert(candidates.len().min(2), crate::store::hit(n, c, 0.0));
+            }
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        let mut notes = std::collections::BTreeMap::<String, usize>::new();
+        let sources: Vec<_> = candidates
+            .into_iter()
+            .map(|mut h| {
+                h.text
+                    .truncate(h.text.floor_char_boundary(768.min(h.text.len())));
+                h
+            })
+            .filter(|h| {
+                let count = notes.entry(h.note_id.clone()).or_default();
+                if *count >= 2 || !seen.insert((h.status.clone(), hash(h.text.trim().as_bytes()))) {
+                    return false;
+                }
+                *count += 1;
+                true
+            })
+            .take(8)
+            .collect();
         let validated_decisions = sources
             .iter()
             .filter(|h| {
@@ -237,7 +353,13 @@ impl Index {
             .filter(|h| h.status == "deprecated")
             .map(|h| h.chunk_id.clone())
             .collect();
-        let b = Bundle {
+        let mut b = Bundle {
+            budget: Some(ContextBudget {
+                max_bytes: MAX_BYTES,
+                max_sources: 8,
+                estimated_tokens: 0,
+                estimate_method: "UTF-8 JSON bytes / 4, approximate; not tokenizer measured".into(),
+            }),
             validated_decisions,
             pending_sources,
             deprecated_sources,
@@ -248,6 +370,36 @@ impl Index {
             sources,
             created: now(),
         };
+        // Count the complete serialized response, including citations, paths,
+        // status and JSON escaping. Trim on UTF-8 boundaries, then rebuild IDs.
+        loop {
+            let estimate = serde_json::to_vec(&b)?.len().div_ceil(4);
+            if let Some(budget) = &mut b.budget {
+                budget.estimated_tokens = estimate;
+            }
+            if serde_json::to_vec(&b)?.len() <= MAX_BYTES {
+                break;
+            }
+            let Some(last) = b.sources.last_mut() else {
+                return Err(Error::Invalid("context metadata exceeds budget"));
+            };
+            if last.text.len() > 256 {
+                last.text.truncate(
+                    last.text
+                        .floor_char_boundary(last.text.len().saturating_sub(256)),
+                );
+            } else {
+                b.sources.pop();
+            }
+            let ids: std::collections::BTreeSet<_> =
+                b.sources.iter().map(|h| h.chunk_id.clone()).collect();
+            b.validated_decisions.retain(|id| ids.contains(id));
+            b.pending_sources.retain(|id| ids.contains(id));
+            b.deprecated_sources.retain(|id| ids.contains(id));
+        }
+        self.db.execute(
+            "DELETE FROM bundles WHERE id IN (SELECT id FROM bundles ORDER BY rowid DESC LIMIT -1 OFFSET 511)", [],
+        )?;
         self.db.execute(
             "INSERT OR REPLACE INTO bundles VALUES(?1,?2,?3)",
             params![b.id, b.revision, serde_json::to_string(&b)?],
@@ -287,6 +439,22 @@ pub fn verify_vault(config: &Config, snapshot: &Snapshot) -> Result<()> {
     let current = crate::scan(config, &std::sync::atomic::AtomicBool::new(false))?;
     if current.revision != snapshot.revision {
         return Err(Error::Conflict);
+    }
+    Ok(())
+}
+
+fn validate_proposal_input(source: &str, title: &str, project: &str, markdown: &str) -> Result<()> {
+    if source.is_empty()
+        || source.len() > 512
+        || title.is_empty()
+        || title.len() > 256
+        || project.len() > 128
+        || markdown.is_empty()
+        || markdown.len() > 32_000
+        || title.chars().any(char::is_control)
+        || project.chars().any(char::is_control)
+    {
+        return Err(Error::Invalid("invalid capture proposal"));
     }
     Ok(())
 }

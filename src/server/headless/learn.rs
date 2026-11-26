@@ -65,6 +65,12 @@ pub(super) fn dispatch(
             if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&response) {
                 if value["result"]["status"].is_object() {
                     value["result"]["status"]["runtime"] = serde_json::json!(runtime);
+                    if let Ok(journal) = mercury_learn::checkpoints::Journal::open(
+                        &crate::session::data_dir().join("learn"),
+                    ) {
+                        value["result"]["status"]["checkpoints"] =
+                            journal.status().unwrap_or(serde_json::Value::Null);
+                    }
                     response = value.to_string();
                 }
             }
@@ -377,6 +383,7 @@ fn to_status(
     recent_metrics: Vec<LearnObservedMetricInfo>,
 ) -> LearnStatusInfo {
     LearnStatusInfo {
+        checkpoints: None,
         runtime: None,
         ledger_present,
         changes: LearnChangeCounts {

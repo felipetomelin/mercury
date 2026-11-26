@@ -529,3 +529,45 @@ pub(crate) fn parse_integration_version(content: &str) -> Option<u32> {
             .ok()
     })
 }
+
+/// Read-only readiness for managed learning hooks. A current script alone does
+/// not mean the CLI invokes it. User/project/plugin overrides remain explicit.
+pub(crate) fn learning_hook_readiness() -> serde_json::Value {
+    use serde_json::{json, Value};
+    fn document(path: &Path) -> Option<Value> {
+        use std::io::Read;
+        let mut text = String::new();
+        fs::File::open(path)
+            .ok()?
+            .take(1024 * 1024 + 1)
+            .read_to_string(&mut text)
+            .ok()?;
+        if text.len() > 1024 * 1024 {
+            return None;
+        }
+        serde_json::from_str(&text).ok()
+    }
+    fn command_registered(value: &Value, event: &str, command: &str) -> bool {
+        value["hooks"][event].as_array().is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                entry["hooks"].as_array().is_some_and(|hooks| {
+                    hooks
+                        .iter()
+                        .any(|h| h["type"] == "command" && h["command"].as_str() == Some(command))
+                })
+            })
+        })
+    }
+    let claude=claude_dir().ok().map(|dir|{
+        let path=dir.join("hooks").join(super::CLAUDE_HOOK_INSTALL_NAME);
+        let value=document(&dir.join("settings.json")).unwrap_or(Value::Null);
+        let events:Vec<_>=[("SessionStart","session"),("Stop","turn"),("SessionEnd","end")].into_iter().map(|(event,action)|json!({"event":event,"registered":command_registered(&value,event,&super::command::hook_command(&path,Some(action)))})).collect();
+        json!({"events":events,"repair":"mercury integration install claude"})
+    });
+    let codex=codex_dir().ok().map(|dir|{
+        let path=dir.join(super::CODEX_HOOK_INSTALL_NAME);
+        let value=document(&dir.join("hooks.json")).unwrap_or(Value::Null);
+        json!({"session_start_registered":command_registered(&value,"SessionStart",&super::command::hook_command(&path,Some("session"))),"completion":"native task_complete records; explicit checkpoint fallback","repair":"mercury integration install codex"})
+    });
+    json!({"claude":claude,"codex":codex,"scope":"Mercury-managed global hook registrations; project and plugin overrides must preserve these hooks","authentication":"not verified by hook inspection"})
+}

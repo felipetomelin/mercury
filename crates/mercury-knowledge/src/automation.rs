@@ -8,6 +8,10 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Capture {
     pub id: String,
+    #[serde(default)]
+    pub checkpoint_id: Option<String>,
+    #[serde(default)]
+    pub outcome: Option<String>,
     pub provider: String,
     pub session_id: String,
     pub transcript: PathBuf,
@@ -39,6 +43,8 @@ impl Capture {
         }
         Ok(Self {
             id: hash(format!("observed:{provider}:{session}:{fingerprint}").as_bytes()),
+            checkpoint_id: None,
+            outcome: None,
             provider: provider.into(),
             session_id: session.into(),
             transcript: path,
@@ -164,6 +170,25 @@ impl Index {
             json!({"captures":counts,"failures":failures,"runtime":self.auto_state("runtime")?,"graph":self.auto_state("graph")?,"reserved_calls_today":used}),
         )
     }
+    /// Preview or retry one entry without replaying completed model stages.
+    /// A legacy mutable source with a different fingerprint cannot be rebased:
+    /// the user must create a fresh trusted checkpoint instead.
+    pub fn retry_capture(&self, id: &str, apply: bool) -> Result<Value> {
+        let mut capture = self
+            .capture_record(id)?
+            .ok_or(Error::Invalid("unknown capture"))?;
+        let eligible = capture.state == "failed";
+        if apply && eligible {
+            capture.state = "queued".into();
+            capture.attempts = 0;
+            capture.next_at = now();
+            capture.error = None;
+            self.save_capture(&capture)?;
+        }
+        Ok(
+            json!({"id":id,"state":capture.state,"eligible":eligible,"applied":apply && eligible,"proposal_preserved":capture.proposal_id.is_some(),"checkpoint_id":capture.checkpoint_id}),
+        )
+    }
     /// Explicit rebuild is also the recovery action for exhausted automatic work.
     pub fn retry_automation(&self) -> Result<()> {
         self.automation_setup()?;
@@ -202,6 +227,18 @@ impl Index {
         Ok(())
     }
     pub fn proposal_by_source(&self, source: &str) -> Result<Option<crate::capture::Proposal>> {
+        self.db.execute_batch("CREATE TABLE IF NOT EXISTS lesson_observations(source TEXT PRIMARY KEY,proposal TEXT NOT NULL);")?;
+        let known: Option<String> = self
+            .db
+            .query_row(
+                "SELECT proposal FROM lesson_observations WHERE source=?1",
+                [source],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(id) = known {
+            return self.proposal(&id);
+        }
         let body:Option<String>=self.db.query_row("SELECT body FROM proposals WHERE json_extract(body,'$.source')=?1 ORDER BY rowid LIMIT 1",[source],|r|r.get(0)).optional()?;
         body.map(|b| serde_json::from_str(&b).map_err(Error::from))
             .transpose()

@@ -2,6 +2,7 @@
 //! server until the reversible ledger and undo flow are complete.
 
 mod changes;
+pub mod checkpoints;
 #[cfg(unix)]
 pub mod curator;
 pub mod metrics;

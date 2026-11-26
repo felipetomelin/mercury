@@ -1,0 +1,19 @@
+name: Portable memory and knowledge
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  memory-contracts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install repository Rust toolchain
+        run: rustup show active-toolchain
+      - name: Test isolated memory, checkpoints, index and retrieval
+        run: cargo test -p mercury-learn -p mercury-knowledge --locked

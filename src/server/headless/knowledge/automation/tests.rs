@@ -307,6 +307,15 @@ fn live_automation_smoke_with_synthetic_session_only() {
     f.config.automation.daily_model_calls = 32;
     fs::write(f.config.vault.join("Alpha.md"),"# Synthetic Alpha\nAlpha depends on Beta. Beta provides queue replay for Alpha. ADR-17 selected Beta because replay is required.\n").unwrap();
     fs::write(f.config.vault.join("Beta.md"),"# Synthetic Beta\nBeta provides durable queue persistence. These are fictional services for a test.\n").unwrap();
+    let events = [
+        json!({"type":"user","sessionId":"session-1","cwd":"/synthetic/alpha","message":{"role":"user","content":"Explicit confirmed project decision ADR-17 for fictional Synthetic Alpha: Beta is the durable queue store for all Alpha retries. Every retry must preserve the original idempotency key and use exponential backoff. This is a permanent project convention; please save it as a reusable engineering lesson, with the decision and its rationale (durable replay without duplicate effects)."}}),
+        json!({"type":"assistant","sessionId":"session-1","message":{"role":"assistant","id":"a1","content":"Confirmed ADR-17: Alpha depends on Beta for durable retry replay. Preserve original idempotency keys and exponential backoff to avoid duplicate effects."}}),
+    ];
+    fs::write(
+        &f.path,
+        events.iter().map(|e| format!("{e}\n")).collect::<String>(),
+    )
+    .unwrap();
     let mut worker = AutomationWorker::start_at(
         f.root.join("knowledge"),
         f.config.clone(),
@@ -335,6 +344,14 @@ fn live_automation_smoke_with_synthetic_session_only() {
             );
             break;
         }
+        if let Some(capture) = index.capture_record(&f.entry().id).unwrap() {
+            assert!(!(capture.state=="done" && capture.outcome.as_deref()==Some("no_change")),"provider returned no_change for the explicit synthetic decision; publication smoke not satisfied");
+            assert_ne!(
+                capture.state, "failed",
+                "synthetic capture failed: {:?}",
+                capture.error
+            );
+        }
         assert!(
             Instant::now() < deadline,
             "live automation deadline: {}",
@@ -343,4 +360,141 @@ fn live_automation_smoke_with_synthetic_session_only() {
         std::thread::sleep(Duration::from_millis(200));
     }
     assert!(worker.stop(Duration::from_secs(3)));
+}
+
+#[test]
+fn native_checkpoint_feeds_memory_and_notes_and_recovers_after_both_workers_restart() {
+    use mercury_learn::{
+        checkpoints::Journal,
+        policy::Proposal,
+        reviewer::{ReviewError, ReviewResult, ReviewTarget, SessionReviewer},
+        transcript::{Provider, Transcript},
+    };
+    struct MemoryReviewer;
+    impl SessionReviewer for MemoryReviewer {
+        fn review<'a>(
+            &'a self,
+            transcript: &'a Transcript,
+            targets: &'a [ReviewTarget],
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = std::result::Result<ReviewResult, ReviewError>>
+                    + 'a,
+            >,
+        > {
+            assert_eq!(transcript.messages.len(), 2);
+            assert_eq!(targets.len(), 1);
+            assert_eq!(targets[0].id, "mercury-memory");
+            Box::pin(async {
+                Ok(ReviewResult {
+                    proposals: vec![Proposal {
+                        target_id: "mercury-memory".into(),
+                        content: "# Managed lessons\nUse a bounded queue for retries.\n".into(),
+                        reason: "Confirmed preference".into(),
+                        source: "synthetic-checkpoint".into(),
+                    }],
+                    observed_cost_usd: Some(0.01),
+                })
+            })
+        }
+    }
+    let mut f = Fixture::new();
+    f.native_stub();
+    f.config.automation.graph = false;
+    let managed = f.config.vault.join("Mercury");
+    mercury_learn::storage::ensure_private_dir(&managed).unwrap();
+    let memory = managed.join("LearnMemory.md");
+    fs::write(&memory, "# Managed lessons\n").unwrap();
+    let config:crate::config::Config=toml::from_str(&format!("[learn]\nenabled=true\nweekly=false\n[[learn.target]]\nid='mercury-memory'\npath='{}'\nkind='memory'\nmax_bytes=8192\n",memory.display())).unwrap();
+    let path = f.root.join("native-codex.jsonl");
+    fs::write(
+        &path,
+        format!(
+            "{}\n",
+            json!({"type":"session_meta","payload":{"id":"codex-main","cwd":f.root}})
+        ),
+    )
+    .unwrap();
+    let journal_root = f.root.join("learn");
+    Journal::open(&journal_root)
+        .unwrap()
+        .register(Provider::Codex, "codex-main", &path, false)
+        .unwrap();
+    let append = |n: usize| {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        for event in [
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":format!("Remember bounded queue retries {n}")}]}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Use bounded queue retries."}]}}),
+            json!({"type":"event_msg","payload":{"type":"task_complete"}}),
+        ] {
+            writeln!(file, "{event}").unwrap();
+        }
+    };
+    let start_learn = || {
+        crate::app::learn::LearnWorker::start_with_reviewer(
+            &journal_root,
+            &config.learn,
+            MemoryReviewer,
+            None,
+        )
+        .unwrap()
+    };
+    let start_notes = || {
+        AutomationWorker::start_at(
+            f.root.join("knowledge"),
+            f.config.clone(),
+            Default::default(),
+            vec![],
+        )
+        .unwrap()
+    };
+    let mut learn = start_learn();
+    let mut notes = start_notes();
+    append(1);
+    wait(|| {
+        let j = Journal::open(&journal_root).unwrap();
+        j.status().unwrap()["checkpoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["learn"] == "done" && c["knowledge"] == "done")
+    });
+    assert!(learn.stop_for_handoff());
+    assert!(notes.stop(Duration::from_secs(2)));
+    let first = fs::read(&memory).unwrap();
+    assert!(first.len() <= 8192);
+    assert!(String::from_utf8_lossy(&first).contains("status: proposed"));
+    append(2);
+    let mut learn = start_learn();
+    let mut notes = start_notes();
+    wait(|| {
+        let j = Journal::open(&journal_root).unwrap();
+        j.status().unwrap()["checkpoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["learn"] == "no_change" && c["knowledge"] == "no_change")
+    });
+    assert!(learn.stop_for_handoff());
+    assert!(notes.stop(Duration::from_secs(2)));
+    assert_eq!(fs::read(&memory).unwrap(), first);
+    let index = f.index();
+    let proposals = index.proposals().unwrap();
+    assert_eq!(proposals.len(), 1);
+    assert_eq!(proposals[0].state, "accepted");
+    let budget = index.automation_status().unwrap()["reserved_calls_today"].clone();
+    for _ in 0..100 {
+        assert!(!index
+            .context("Queue retries", &proposals[0].project)
+            .unwrap()
+            .sources
+            .is_empty());
+    }
+    assert_eq!(
+        index.automation_status().unwrap()["reserved_calls_today"],
+        budget
+    );
+    index.review(&f.config, &proposals[0].id, "undo").unwrap();
+    assert_eq!(fs::read(&memory).unwrap(), first);
 }

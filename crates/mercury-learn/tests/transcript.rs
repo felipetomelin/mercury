@@ -313,3 +313,32 @@ fn symlinked_transcript_is_rejected() {
         Err(TranscriptError::InvalidPath)
     ));
 }
+
+#[test]
+fn codex_id_alias_accepts_current_headers_and_rejects_conflicting_or_subagent_identity() {
+    let f = Fixture::new("alias.jsonl");
+    let user = json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"confirmed preference"}]}});
+    f.write(&[
+        json!({"type":"session_meta","payload":{"id":"session-1"}}),
+        user.clone(),
+    ]);
+    assert_eq!(
+        read(&f.file, Provider::Codex, "session-1", Limits::default())
+            .unwrap()
+            .user_turns,
+        Some(1)
+    );
+    for payload in [
+        json!({"id":"different","session_id":"session-1"}),
+        json!({"id":"session-1","source":{"subagent":{"thread_spawn":{}}}}),
+    ] {
+        f.write(&[
+            json!({"type":"session_meta","payload":payload}),
+            user.clone(),
+        ]);
+        assert!(matches!(
+            read(&f.file, Provider::Codex, "session-1", Limits::default()),
+            Err(TranscriptError::InvalidSession)
+        ));
+    }
+}

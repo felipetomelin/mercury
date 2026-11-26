@@ -569,3 +569,194 @@ fn context_separates_reviewed_decisions_from_pending_and_deprecated_sources() {
         .iter()
         .any(|h| h.chunk_id == *id && h.status == "validated")));
 }
+
+#[test]
+fn local_context_budget_cache_graph_hop_and_hundred_queries_need_no_model() {
+    let mut f = Fixture::new();
+    f.note("Deploy.md","---\nid: deploy\nproject: PV\ntype: decision\nstatus: validated\ndepends_on: ['[[Rollback]]']\n---\n# Release deployment\nThe deployment must use the approved queue.");
+    f.note("Rollback.md","---\nid: rollback\nproject: PV\nstatus: validated\n---\n# Rollback\nRevert using the last stable release.");
+    f.note(
+        "Private.md",
+        "---\nproject: OTHER\n---\nRelease deployment OTHER_PRIVATE_MARKER",
+    );
+    for n in 0..30 {
+        f.note(
+            &format!("Long{n}.md"),
+            &format!(
+                "---\nproject: PV\nstatus: proposed\n---\n# Deployment evidence {n}\n{}",
+                "deployment revisão 🦀 ".repeat(700)
+            ),
+        );
+    }
+    f.sync();
+    let baseline = f
+        .index
+        .search(
+            "release deployment",
+            &Filter {
+                project: Some("PV".into()),
+                ..Default::default()
+            },
+            8,
+        )
+        .unwrap();
+    assert!(baseline.iter().any(|h| h.note_id == "deploy"));
+    let cold = std::time::Instant::now();
+    let first = f.index.context("release deployment", "PV").unwrap();
+    let cold_elapsed = cold.elapsed();
+    let repeated = std::time::Instant::now();
+    assert!(first.sources.iter().any(|h| h.note_id == "deploy"));
+    assert!(first
+        .sources
+        .iter()
+        .any(|h| h.note_id == "rollback" && h.text.contains("Revert using")));
+    for _ in 0..100 {
+        let b = f.index.context("release deployment", "PV").unwrap();
+        assert_eq!(
+            serde_json::to_value(&b).unwrap(),
+            serde_json::to_value(&first).unwrap()
+        );
+        assert!(b.sources.len() <= 8);
+        assert!(serde_json::to_vec(&b).unwrap().len() <= 8192);
+        assert!(b.sources.iter().all(|h| h.project == "PV"));
+        assert!(!serde_json::to_string(&b)
+            .unwrap()
+            .contains("OTHER_PRIVATE_MARKER"));
+    }
+    eprintln!("LOCAL_CONTEXT_CORPUS baseline_relevant=1 compact_relevant=2/2 sources={} bytes={} cold_us={} cached_100_us={} model_calls=0", first.sources.len(),serde_json::to_vec(&first).unwrap().len(),cold_elapsed.as_micros(),repeated.elapsed().as_micros());
+    assert_eq!(
+        f.index.automation_status().unwrap()["reserved_calls_today"],
+        0
+    );
+    f.note(
+        "New.md",
+        "---\nproject: PV\n---\nrelease deployment new evidence",
+    );
+    f.sync();
+    assert_ne!(
+        f.index.context("release deployment", "PV").unwrap().id,
+        first.id
+    );
+}
+
+#[test]
+fn automatic_lessons_deduplicate_by_project_and_preserve_each_observation() {
+    let f = Fixture::new();
+    let a = f
+        .index
+        .propose_automatic("checkpoint:a", "Preference", "PV", "Use a bounded queue.")
+        .unwrap();
+    let b = f
+        .index
+        .propose_automatic("checkpoint:b", "Preference", "PV", "Use a bounded queue.")
+        .unwrap();
+    assert_eq!(a.id, b.id);
+    assert_eq!(
+        f.index
+            .proposal_by_source("checkpoint:b")
+            .unwrap()
+            .unwrap()
+            .id,
+        a.id
+    );
+    let other = f
+        .index
+        .propose_automatic(
+            "checkpoint:c",
+            "Preference",
+            "OTHER",
+            "Use a bounded queue.",
+        )
+        .unwrap();
+    assert_ne!(a.id, other.id);
+}
+
+#[test]
+fn context_cache_key_cannot_collide_across_project_and_query_delimiters() {
+    let mut f = Fixture::new();
+    f.note("A.md", "---\nproject: 'PV:foo'\n---\nbar PRIVATE_A");
+    f.note("B.md", "---\nproject: PV\n---\nfoo bar PUBLIC_B");
+    f.sync();
+    let a = f.index.context("bar", "PV:foo").unwrap();
+    let b = f.index.context("foo:bar", "PV").unwrap();
+    assert_ne!(a.id, b.id);
+    assert!(b.sources.iter().all(|h| h.project == "PV"));
+    assert!(!serde_json::to_string(&b).unwrap().contains("PRIVATE_A"));
+    assert!(f
+        .index
+        .propose_automatic("valid", "valid", "PV", "same")
+        .is_ok());
+    assert!(f.index.propose_automatic("", "", "PV", "same").is_err());
+}
+
+#[test]
+fn grounded_answers_reuse_cache_only_for_the_same_graph_query_budget_and_scope() {
+    struct Counted(AtomicUsize);
+    impl backend::Model for Counted {
+        fn fingerprint(&self) -> String {
+            backend::Model::fingerprint(&Fake)
+        }
+        fn embed(&self, text: &str) -> Result<Vec<f32>> {
+            backend::Model::embed(&Fake, text)
+        }
+        fn structured(
+            &self,
+            task: &str,
+            input: &serde_json::Value,
+            schema: &serde_json::Value,
+        ) -> Result<serde_json::Value> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            if task.starts_with("extract")
+                && !input["text"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("Alpha depends on Beta")
+            {
+                return Ok(serde_json::json!({"entities":[],"relations":[]}));
+            }
+            backend::Model::structured(&Fake, task, input, schema)
+        }
+    }
+    let mut f = Fixture::new();
+    f.note("A.md", "---\nproject: PV\n---\nAlpha depends on Beta");
+    f.sync();
+    let cancel = AtomicBool::new(false);
+    let model = Counted(AtomicUsize::new(0));
+    f.index.build_graph(&model, &cancel).unwrap();
+    model.0.store(0, Ordering::Relaxed);
+    let filter = Filter {
+        project: Some("PV".into()),
+        ..Default::default()
+    };
+    let a = f
+        .index
+        .ask("Alpha", "local", &filter, &model, &cancel, 32000)
+        .unwrap();
+    let first = model.0.load(Ordering::Relaxed);
+    assert!(first > 0);
+    for _ in 0..10 {
+        assert_eq!(
+            serde_json::to_value(
+                f.index
+                    .ask("Alpha", "local", &filter, &model, &cancel, 32000)
+                    .unwrap()
+            )
+            .unwrap(),
+            serde_json::to_value(&a).unwrap()
+        );
+    }
+    assert_eq!(model.0.load(Ordering::Relaxed), first);
+    f.index
+        .ask("Alpha", "local", &filter, &model, &cancel, 31000)
+        .unwrap();
+    assert!(model.0.load(Ordering::Relaxed) > first);
+    f.note(
+        "A.md",
+        "---\nproject: PV\n---\nAlpha depends on Beta with new facts",
+    );
+    f.sync();
+    assert!(f
+        .index
+        .ask("Alpha", "local", &filter, &model, &cancel, 32000)
+        .is_err());
+}

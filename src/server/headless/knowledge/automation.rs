@@ -65,6 +65,10 @@ impl AutomationWorker {
             receiver,
         )
     }
+    pub(crate) fn is_running(&self) -> bool {
+        !self.cancel.load(Ordering::Acquire)
+            && self.handle.as_ref().is_some_and(|h| !h.is_finished())
+    }
     pub(crate) fn submit(&self, session: crate::app::learn::ReviewSession) -> bool {
         !self.cancel.load(Ordering::Acquire)
             && self
@@ -189,6 +193,10 @@ fn run(
             Err(error) => return Err(error),
         }
     };
+    let journal_root = root.parent().ok_or(Error::UnsafePath)?.join("learn");
+    let mut checkpoints =
+        mercury_learn::checkpoints::Journal::open(&journal_root).map_err(|_| Error::Unavailable)?;
+    let mut next_observe = Instant::now();
     let mut next_poll = Instant::now();
     let mut pending_revision: Option<String> = None;
     while !cancel.load(Ordering::Acquire) {
@@ -204,6 +212,54 @@ fn run(
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        if Instant::now() >= next_observe {
+            crate::app::learn::resolve_learning_bindings(&checkpoints);
+            checkpoints.observe().map_err(|_| Error::Unavailable)?;
+            if config.automation.capture {
+                for checkpoint in checkpoints
+                    .pending("knowledge")
+                    .map_err(|_| Error::Unavailable)?
+                {
+                    if checkpoint.verify().is_err() {
+                        checkpoints
+                            .finish("knowledge", &checkpoint.id, "failed")
+                            .map_err(|_| Error::Unavailable)?;
+                        continue;
+                    }
+                    let fingerprint =
+                        mercury_learn::storage::transcript_fingerprint(&checkpoint.path)
+                            .map_err(|_| Error::Conflict)?;
+                    let mut capture = Capture::new(
+                        mercury_learn::checkpoints::name(checkpoint.provider),
+                        &checkpoint.session_id,
+                        checkpoint.path,
+                        fingerprint,
+                    )?;
+                    capture.checkpoint_id = Some(checkpoint.id.clone());
+                    if let Some(stored) = index.capture_record(&capture.id)? {
+                        if ["done", "failed"].contains(&stored.state.as_str()) {
+                            checkpoints
+                                .finish(
+                                    "knowledge",
+                                    &checkpoint.id,
+                                    if stored.outcome.as_deref() == Some("no_change") {
+                                        "no_change"
+                                    } else {
+                                        &stored.state
+                                    },
+                                )
+                                .map_err(|_| Error::Unavailable)?;
+                        }
+                    } else {
+                        index.enqueue_capture(&capture)?;
+                        next_poll = next_poll.min(
+                            Instant::now() + Duration::from_secs(config.automation.debounce_secs),
+                        );
+                    }
+                }
+            }
+            next_observe = Instant::now() + Duration::from_secs(1);
         }
         if Instant::now() < next_poll {
             continue;
@@ -249,6 +305,7 @@ fn run(
                 return Ok(());
             }
             if !pending.is_empty() || graph_due {
+                index.save_auto_state("runtime",&json!({"state":"processing","stage":if !pending.is_empty(){"capture"}else{"graph"},"updated":mercury_knowledge::now()}))?;
                 let latest_limits = limits.lock().map_err(|_| Error::Unavailable)?.clone();
                 let model = match NativeModel::new(
                     &config,
@@ -284,6 +341,35 @@ fn run(
                 process_captures(&mut index, &config, &pending, &budget, cancel)?;
                 // Managed publication is complete and journaled: index it immediately.
                 index.sync(&config, cancel)?;
+                for checkpoint in checkpoints
+                    .pending("knowledge")
+                    .map_err(|_| Error::Unavailable)?
+                {
+                    let fingerprint =
+                        mercury_learn::storage::transcript_fingerprint(&checkpoint.path)
+                            .map_err(|_| Error::Conflict)?;
+                    let c = Capture::new(
+                        mercury_learn::checkpoints::name(checkpoint.provider),
+                        &checkpoint.session_id,
+                        checkpoint.path,
+                        fingerprint,
+                    )?;
+                    if let Some(capture) = index.capture_record(&c.id)? {
+                        if ["done", "failed"].contains(&capture.state.as_str()) {
+                            checkpoints
+                                .finish(
+                                    "knowledge",
+                                    &checkpoint.id,
+                                    if capture.outcome.as_deref() == Some("no_change") {
+                                        "no_change"
+                                    } else {
+                                        &capture.state
+                                    },
+                                )
+                                .map_err(|_| Error::Unavailable)?;
+                        }
+                    }
+                }
                 if (graph_due || index.status()?.revision != state.revision)
                     && config.automation.graph
                     && index.status()?.notes > 0
@@ -373,7 +459,12 @@ fn process_captures(
                 "auto:observed:{}:{}:{}",
                 capture.provider, capture.session_id, capture.fingerprint
             );
-            let proposal = match index.proposal_by_source(&source)? {
+            let stored = if let Some(id) = &capture.proposal_id {
+                index.proposal(id)?
+            } else {
+                None
+            };
+            let proposal = match stored.or(index.proposal_by_source(&source)?) {
                 Some(proposal) => proposal,
                 None => {
                     let mut params = KnowledgeParams::new(Action::Capture);
@@ -392,6 +483,14 @@ fn process_captures(
                     )?
                 }
             };
+            capture.outcome = Some(
+                if proposal.source != source {
+                    "no_change"
+                } else {
+                    "proposed"
+                }
+                .into(),
+            );
             capture.proposal_id = Some(proposal.id.clone());
             index.save_capture(&capture)?;
             if cancel.load(Ordering::Acquire) {
@@ -420,6 +519,13 @@ fn process_captures(
             Ok(())
         })();
         if let Err(error) = result {
+            if matches!(error, Error::Invalid("no reusable learning")) {
+                capture.state = "done".into();
+                capture.outcome = Some("no_change".into());
+                capture.error = None;
+                index.save_capture(&capture)?;
+                continue;
+            }
             if cancel.load(Ordering::Acquire) {
                 return Err(Error::Cancelled);
             }
@@ -443,6 +549,7 @@ impl crate::app::App {
         {
             return Ok(());
         }
+        self.restore_learning_sources()?;
         self.knowledge_automation = Some(
             AutomationWorker::start(
                 self.knowledge_config.clone(),
@@ -462,6 +569,19 @@ impl crate::app::App {
         };
         if !trigger.key().ends_with(":end") {
             return false;
+        }
+        if self.policy.background_updates {
+            return mercury_learn::checkpoints::Journal::open(
+                &crate::session::data_dir().join("learn"),
+            )
+            .and_then(|journal| {
+                journal.request(
+                    session.provider,
+                    &session.session_id,
+                    &session.transcript_path,
+                )
+            })
+            .unwrap_or(false);
         }
         self.knowledge_automation
             .as_ref()

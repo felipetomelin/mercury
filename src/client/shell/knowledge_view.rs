@@ -73,15 +73,25 @@ pub(super) fn render(
         lines.push("Memória desativada · configure [knowledge] para começar".into());
     } else if let Some(index) = state.data["index"].as_object() {
         lines.push("Memória local ativa".into());
+        if let Some(sources) = state.data["checkpoints"]["sources"].as_u64() {
+            lines.push(format!(
+                "Sessões registradas: {sources} · bloqueadas: {}",
+                state.data["checkpoints"]["blocked_sources"]
+                    .as_u64()
+                    .unwrap_or(0)
+            ));
+        }
         if let Some(automation) = state.data["automation"].as_object() {
             let state_label = if automation.get("enabled").and_then(|v| v.as_bool()) != Some(true) {
                 "pausada"
+            } else if automation.get("worker_running").and_then(|v| v.as_bool()) == Some(false) {
+                "monitor indisponível · consulte knowledge doctor"
             } else if automation.get("external_allowed").and_then(|v| v.as_bool()) != Some(true) {
                 "indexação local · modelos aguardam configuração"
             } else {
                 match state.data["automation"]["state"]["runtime"]["state"].as_str() {
                     Some("error") => "atenção: consulte o diagnóstico abaixo",
-                    Some("watching") => "ativa · monitorando notas e sessões",
+                    Some("watching") => "ativa · observando notas e checkpoints registrados",
                     _ => "iniciando ou processando",
                 }
             };
