@@ -62,8 +62,10 @@ Achados corrigidos e limites em review.md. SonarQube, Veracode, Wiz e cobertura
 quantitativa continuam dispensados pela exceção vigente de 2026-10-29 do Mercury;
 não foram executados nem reportados como PASS externo.
 
-CI Linux/macOS adicionado com testes de memória/indexação/retrieval isolados,
-sem credenciais. Execução remota e publicação serão registradas após observação.
+CI Linux/macOS executado com sucesso para o commit de implementação `518008c`,
+com testes de memória/indexação/retrieval isolados, sem credenciais.
+Execução: [https://github.com/felipetomelin/mercury/actions/runs/45835386533](https://github.com/felipetomelin/mercury/actions/runs/45835386533). Ambos os jobs concluíram success.
+Implementação publicada em origin/main; diretório de trabalho sincronizado.
 Windows não foi qualificado para gravações privadas Unix. Nenhuma ativação em
 configuração pessoal, deploy ou aceite manual do vault real faz parte desta entrega.
 

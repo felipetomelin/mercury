@@ -41,7 +41,7 @@ para o repositório central. Implementação autorizada.
 ## Gates
 
 Investigação, spec, esclarecimentos, plano e análise: preparados e consistentes.
-Implementação, revisão e validação locais concluídas. Publicação autorizada após gates locais PASS.
+Implementação, revisão e validação locais concluídas. Implementação 518008c publicada em origin/main; gates locais e CI Linux/macOS PASS.
 Relatório de execução e limitações em validation.md.
 Externos/coverage: dispensa vigente do Mercury, sem resultado fabricado.
 Nenhum agente delegado; leituras independentes foram agrupadas em ferramentas.

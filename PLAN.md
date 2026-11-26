@@ -13,7 +13,8 @@ Diagnóstico/recuperação focal/undo documentados em
 Workspace serial 4.186 PASS; principal 3.724 PASS; Learn/Knowledge finais 135 PASS;
 manutenção 80 PASS; smokes reais sintéticos Learn/undo e Knowledge/nota/grafo PASS.
 Evidências e limites em `specs/014-reliable-memory-learning/validation.md`.
-Publicação autorizada pelo usuário após gates locais PASS; sem ativação/deploy pessoal.
+Implementação 518008c publicada em origin/main; CI Linux/macOS PASS
+(run 45835386533). Sem ativação/deploy pessoal.
 
 ## Usage / Crons / visual — concluído localmente, 2026-10-29
 

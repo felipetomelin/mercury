@@ -1,6 +1,6 @@
 # Plano técnico — memória e aprendizado confiáveis
 
-Status: aprovado pelo usuário; implementado e validado; publicação autorizada. Contrato: spec.md; evidências: research.md.
+Status: concluído — 518008c publicado, testes locais e CI Linux/macOS PASS. Contrato: spec.md; evidências: research.md.
 
 ## G1 — Diagnóstico que explique a inatividade (P0)
 

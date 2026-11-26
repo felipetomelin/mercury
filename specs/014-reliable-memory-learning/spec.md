@@ -1,7 +1,7 @@
 # Memória confiável no Obsidian e aprendizado com contexto econômico
 
 Data: 2026-11-26
-Status: aprovada em 2026-11-26; implementada e validada localmente; publicação autorizada.
+Status: concluída — implementação 518008c publicada; gates locais e CI Linux/macOS PASS.
 Escopo confirmado pelo usuário nesta investigação.
 
 ## Problema

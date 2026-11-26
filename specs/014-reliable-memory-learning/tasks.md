@@ -45,4 +45,4 @@
 - [x] Smokes reais sintéticos: memória/undo e nota/indexação/grafo validados.
 - [x] Contratos de configuração, armazenamento privado, backups/undo e handoff via integração.
 - [x] Aceite portátil em raízes temporárias independentes; sem ativação no vault pessoal.
-- [x] Registrar evidências finais e preparar a publicação autorizada após gates.
+- [x] Registrar evidências finais e publicar: 518008c em origin/main; CI Linux/macOS PASS.

@@ -38,8 +38,8 @@ o alvo reservado deriva da instalação. Nenhuma permissão de Route é ampliada
 
 A inspeção de hooks cobre os registros globais gerenciados; overlays de projeto
 ou plugins podem desabilitá-los e são reportados como limite do diagnóstico.
-Tokens são uma estimativa por bytes/4. CI Linux/macOS foi adicionado; execução
-remota só será afirmada depois de observada. Windows não é qualificado para as
+Tokens são uma estimativa por bytes/4. CI Linux/macOS executou com sucesso para 518008c
+(run 45835386533, ambos os jobs success). Windows não é qualificado para as
 escritas privadas Unix. Smokes de inferência são separados dos testes sintéticos.
 
 Gates SonarQube/Veracode/Wiz e cobertura quantitativa: dispensados pela decisão
